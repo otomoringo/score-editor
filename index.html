@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<script>try { if (localStorage.getItem("score-editor.theme") === "light") document.documentElement.dataset.theme = "light"; } catch (e) {}</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>楽譜エディタ（4部合唱）</title>
+<style>
+  :root { color-scheme: dark; --line: #3a4150; --bg: #14171d; --panel: #1f242d; --paper: #181c23; --ink: #e6e9ee; --field: #2a303b; --field-line: #4a5262; --hover: #343b48; --kbd: #2a303b; --sub: #aab1bd; --on-bg: #e6e9ee; --on-ink: #14171d; --accent: #ff6b9d; --end: #4dabf7; --play: #ffa94d; }
+  :root[data-theme=light] { color-scheme: light; --line: #d5d8dd; --bg: #f4f5f7; --panel: #fff; --paper: #fff; --ink: #1d2330; --field: #fff; --field-line: #b9bec7; --hover: #eef1f5; --kbd: #f1f3f5; --sub: #555; --on-bg: #1d2330; --on-ink: #fff; --accent: #c2255c; --end: #1c7ed6; --play: #e8590c; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: "Yu Gothic UI", "Meiryo", system-ui, sans-serif; color: var(--ink); background: var(--bg); display: flex; flex-direction: column; font-size: 14px; }
+  .bar { background: var(--panel); border-bottom: 1px solid var(--line); padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+  .bar label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .group { display: inline-flex; align-items: center; gap: 4px; }
+  .group + .group { border-left: 1px solid var(--line); padding-left: 14px; }
+  input[type=text], input[type=number], select { font: inherit; padding: 3px 6px; border: 1px solid var(--field-line); border-radius: 4px; background: var(--field); color: var(--ink); }
+  #title { width: 16em; }
+  #composer { width: 9em; }
+  #tempo { width: 4.5em; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid var(--field-line); border-radius: 4px; background: var(--field); color: var(--ink); cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button.on { background: var(--on-bg); color: var(--on-ink); border-color: var(--on-bg); }
+  button.primary { background: #2b8a3e; border-color: #2b8a3e; color: #fff; }
+  #status { background: #1d2330; color: #e9ecef; padding: 4px 10px; display: flex; gap: 18px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  #status b { color: #ffd43b; font-weight: 600; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #scroll { flex: 1; overflow: auto; padding: 12px; position: relative; }
+  #paper { background: var(--paper); color: var(--ink); border: 1px solid var(--line); max-width: 1100px; margin: 0 auto; padding: 8px 12px; }
+  #paper svg { display: block; }
+  #help { width: 290px; overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 10px 12px; }
+  #help h3 { margin: 12px 0 4px; font-size: 13px; color: var(--sub); }
+  #help h3:first-child { margin-top: 0; }
+  #help table { border-collapse: collapse; width: 100%; }
+  #help td { padding: 2px 0; vertical-align: top; }
+  #help td:first-child { white-space: nowrap; padding-right: 8px; }
+  kbd { font-family: Consolas, monospace; font-size: 12px; background: var(--kbd); border: 1px solid var(--field-line); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; }
+  .sel, .sel * { fill: #f59f00 !important; }
+  .cur, .cur * { fill: var(--accent) !important; }
+  #paper { user-select: none; }
+  #band { position: fixed; z-index: 10; border: 1px dashed #f59f00; background: rgba(245, 159, 0, 0.15); pointer-events: none; }
+  .cur-end, .cur-end * { fill: var(--end) !important; }
+  .playing, .playing * { fill: var(--play) !important; }
+  [data-tok] { cursor: pointer; }
+  #lyric { position: absolute; display: none; font: inherit; font-size: 15px; width: 7em; padding: 2px 4px; border: 2px solid var(--accent); border-radius: 4px; z-index: 5; background: var(--field); color: var(--ink); }
+  #msg { color: #e8590c; }
+  #wavHost { position: absolute; left: -99999px; top: 0; width: 1000px; }
+  @media print {
+    .bar, #status, #help, #lyric { display: none !important; }
+    body, #main, #scroll { display: block; height: auto; overflow: visible; background: #fff; padding: 0; }
+    #paper { border: none; max-width: none; padding: 0; background: #fff; color: #000; }
+    #paper svg { break-inside: avoid; }
+    .cur, .cur *, .cur-end, .cur-end *, .playing, .playing *, .sel, .sel * { fill: #000 !important; }
+  }
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="group">
+    <button id="btnNew">新規</button>
+    <button id="btnOpen">開く</button>
+    <button id="btnSave" title="Ctrl+S">保存</button>
+    <input type="file" id="file" accept=".json,application/json" hidden>
+    <button id="btnTheme" title="画面の明るさを切り替え"></button>
+  </span>
+  <span class="group">
+    <label>曲名 <input type="text" id="title"></label>
+    <label>作者 <input type="text" id="composer"></label>
+  </span>
+  <span class="group">
+    <label>編成 <select id="ensemble"></select></label>
+    <label title="調と拍子を、曲の最初から変えるか、カーソルのある小節から変えるか"><select id="scope"><option value="all">曲の最初から</option><option value="here">カーソルの小節から</option></select></label>
+    <label>調 <select id="key"></select></label>
+    <label>拍子 <select id="time"></select></label>
+    <label title="弱起（アウフタクト）。曲の最初の小節を、選んだ長さだけの短い小節にする。頭を休符で埋めて書いてある曲は、その休符が取り除かれる">弱起 <select id="pickup"></select></label>
+    <label>テンポ ♩= <input type="number" id="tempo" min="30" max="240"></label>
+    <label>音色 <select id="inst"><option value="choir_aahs">合唱（アー）</option><option value="acoustic_grand_piano">ピアノ</option></select></label>
+  </span>
+</div>
+<div class="bar">
+  <span class="group" id="durs"></span>
+  <span class="group">
+    <button id="btnPlay" class="primary" title="Space">▶ カーソルから</button>
+    <button id="btnPlayTop" title="Shift+Space">⏮ 先頭から</button>
+    <button id="btnStop">■ 停止</button>
+  </span>
+  <span class="group">鳴らすパート
+    <label><input type="checkbox" class="mute" data-i="0" checked><span class="mlabel">S</span></label>
+    <label><input type="checkbox" class="mute" data-i="1" checked><span class="mlabel">A</span></label>
+    <label><input type="checkbox" class="mute" data-i="2" checked><span class="mlabel">T</span></label>
+    <label><input type="checkbox" class="mute" data-i="3" checked><span class="mlabel">B</span></label>
+  </span>
+  <span class="group">
+    <label title="音符にマウスを乗せると、その拍の4声が鳴ります"><input type="checkbox" id="hover" checked>マウスを乗せて和音を聴く</label>
+  </span>
+  <span class="group">出力
+    <button id="btnPdf">PDF・印刷</button>
+    <button id="btnMidi">MIDI</button>
+    <button id="btnWav">WAV</button>
+    <button id="btnXml">MusicXML</button>
+  </span>
+  <span id="msg"></span>
+</div>
+<div id="status"></div>
+<div id="main">
+  <div id="scroll">
+    <div id="paper"></div>
+    <input type="text" id="lyric" autocomplete="off">
+  </div>
+  <div id="help">
+    <h3>音符を入れる</h3>
+    <table>
+      <tr><td><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><kbd>F</kbd> <kbd>J</kbd><kbd>K</kbd><kbd>L</kbd><kbd>;</kbd></td><td>ド レ ミ ファ ソ ラ シ ド（白鍵）</td></tr>
+      <tr><td><kbd>W</kbd><kbd>E</kbd> <kbd>U</kbd><kbd>I</kbd><kbd>O</kbd></td><td>ド♯ レ♯ ファ♯ ソ♯ ラ♯（黒鍵）</td></tr>
+      <tr><td>左<kbd>Shift</kbd>+鍵</td><td>1オクターブ下</td></tr>
+      <tr><td>右<kbd>Shift</kbd>+鍵</td><td>1オクターブ上</td></tr>
+      <tr><td><kbd>R</kbd> / <kbd>0</kbd></td><td>休符</td></tr>
+      <tr><td><kbd>Insert</kbd></td><td>上書き⇔挿入の切り替え。上書き（ふだんはこちら）は、入れた長さぶん後ろを上書きし、ほかの小節は動かない。挿入は手前に差し込み、後ろがずれる</td></tr>
+      <tr><td><kbd>Z</kbd><kbd>X</kbd><kbd>C</kbd><kbd>V</kbd><kbd>B</kbd></td><td>次に入れる長さ: 全音符・2分・4分・8分・16分（数字の <kbd>1</kbd>〜<kbd>5</kbd> でも同じ）</td></tr>
+      <tr><td><kbd>Alt</kbd>+長さ</td><td>カーソルの音符の長さを変える（伸ばすと後ろを上書き、縮めると休符が残る）</td></tr>
+      <tr><td><kbd>.</kbd></td><td>付点の切り替え</td></tr>
+      <tr><td><kbd>T</kbd></td><td>タイ（同じ高さの音を後ろにつなぐ）</td></tr>
+    </table>
+    <h3>直す</h3>
+    <table>
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>半音上げる・下げる</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></td><td>1オクターブ上げる・下げる</td></tr>
+      <tr><td><kbd>Delete</kbd></td><td>カーソルの音符を休符に戻す</td></tr>
+      <tr><td><kbd>Backspace</kbd></td><td>カーソルの手前を休符に戻す</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd></td><td>元に戻す・やり直す</td></tr>
+    </table>
+    <h3>範囲選択とコピー</h3>
+    <table>
+      <tr><td>マウスで囲む</td><td>囲んだ音符を選択（複数の段もまとめて選べる）</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>カーソルの段で選択を伸ばす</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd></td><td>コピー／切り取り</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>カーソル位置に貼り付け（その長さぶん上書き）</td></tr>
+      <tr><td><kbd>Delete</kbd></td><td>選択した音符を休符に戻す</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>選択を解除</td></tr>
+    </table>
+    <h3>移動</h3>
+    <table>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>前後の音符へ</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>前後の小節へ</td></tr>
+      <tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>パートの先頭・末尾へ</td></tr>
+      <tr><td><kbd>PageUp</kbd> / <kbd>PageDown</kbd></td><td>上・下のパートへ（<kbd>Alt</kbd>+<kbd>↑</kbd><kbd>↓</kbd> でも可）</td></tr>
+      <tr><td>クリック</td><td>その音符へ移動。まだ書いていない先の小節をクリックすると、そこから書き始められる</td></tr>
+    </table>
+    <h3>歌詞</h3>
+    <table>
+      <tr><td><kbd>Enter</kbd></td><td>カーソルの音符の歌詞を入力</td></tr>
+      <tr><td><kbd>Space</kbd> / <kbd>Tab</kbd></td><td>確定して次の音符へ</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>確定して前の音符へ</td></tr>
+      <tr><td><kbd>Enter</kbd> / <kbd>Esc</kbd></td><td>確定して歌詞入力を終える</td></tr>
+    </table>
+    <h3>聴く</h3>
+    <table>
+      <tr><td><kbd>Space</kbd></td><td>カーソル位置から再生・停止</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>Space</kbd></td><td>先頭から再生</td></tr>
+      <tr><td><kbd>H</kbd></td><td>カーソル位置の4声の和音を鳴らす</td></tr>
+      <tr><td>マウスを乗せる</td><td>その拍の4声が鳴る</td></tr>
+    </table>
+    <h3>色の意味</h3>
+    <table>
+      <tr><td style="color:var(--accent)">■ 赤</td><td>カーソル（選択中の音符）</td></tr>
+      <tr><td style="color:var(--end)">■ 青</td><td>パートの末尾（ここに追加される）</td></tr>
+    </table>
+  </div>
+</div>
+<div id="wavHost"></div>
+<script src="vendor/abcjs-basic-min.js"></script>
+<script src="model.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
