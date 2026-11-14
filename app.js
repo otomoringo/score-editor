@@ -2,6 +2,8 @@
 'use strict';
 (() => {
   const M = ScoreModel;
+  const H = ScoreHarmony;
+  const FUNC_LABEL = { T: 'トニック', S: 'サブドミナント', D: 'ドミナント' };
   const $ = (id) => document.getElementById(id);
   const AUTOSAVE_KEY = 'score-editor.autosave';
   const PROGRAM = { choir_aahs: 52, acoustic_grand_piano: 0 };
@@ -141,6 +143,7 @@
     })[0];
     mapElements();
     highlight();
+    decorate();
     updateStatus();
     syncControls();
     if (!printing) {
@@ -173,6 +176,46 @@
           }
         }
       }
+    }
+  }
+
+  // 和音の表示（五線の下にコード名と度数）と、主音・下属音・属音の色分け
+  function decorate() {
+    paper.querySelectorAll('.hl').forEach((el) => el.remove());
+    paper.querySelectorAll('.deg1, .deg4, .deg5').forEach((el) => el.classList.remove('deg1', 'deg4', 'deg5'));
+    const showHarmony = $('harm').checked && !printing;
+    paper.classList.toggle('harm-on', showHarmony);
+    if ($('degree').checked && !printing) {
+      for (const t of toks) {
+        if (t.pad || t.rest) continue;
+        const e = score.parts[t.part].events[t.idx];
+        if (!e || e.rest) continue;
+        const role = H.scaleRole(e, info.grid.at(info.grid.find(t.tick)).key);
+        if (role) for (const el of t.els) el.classList.add('deg' + role);
+      }
+    }
+    if (!showHarmony) return;
+    const byTick = new Map();
+    for (const t of toks) if (t.els.length && !byTick.has(t.tick)) byTick.set(t.tick, t);
+    const pr = paper.getBoundingClientRect();
+    for (const d of H.analyze(score)) {
+      const t = byTick.get(d.tick);
+      const el = t && t.els[0];
+      const svg = el && el.ownerSVGElement;
+      if (!svg) continue;
+      const r = el.getBoundingClientRect();
+      const sr = svg.getBoundingClientRect();
+      const div = document.createElement('div');
+      div.className = 'hl';
+      div.style.left = (r.left - pr.left) + 'px';
+      div.style.top = (sr.bottom - pr.top) + 'px';
+      const name = document.createElement('b');
+      name.textContent = d.name;
+      const fn = document.createElement('span');
+      fn.className = 'fn f' + (d.func || 'N');
+      fn.textContent = d.roman;
+      div.append(name, fn);
+      paper.appendChild(div);
     }
   }
 
@@ -228,6 +271,13 @@
       `<span>入力: <b>${insertMode ? '挿入' : '上書き'}</b>（Insertで切替）</span>`;
     document.querySelectorAll('#durs button[data-base]').forEach((b) => b.classList.toggle('on', Number(b.dataset.base) === curDur.base));
     $('btnDot').classList.toggle('on', curDur.dot);
+    if ($('harm').checked) {
+      const d = H.describe(score, tick, gm.key);
+      if (d) {
+        const fn = FUNC_LABEL[d.func] ? '・' + FUNC_LABEL[d.func] : '';
+        $('status').insertAdjacentHTML('beforeend', `<span>和音: <b>${d.name}</b>（${d.roman}${fn}）</span>`);
+      }
+    }
     syncControls();
   }
 
@@ -982,6 +1032,16 @@
     });
     document.querySelectorAll('.mute').forEach((c) => c.addEventListener('change', () => c.blur()));
     $('hover').addEventListener('change', (e) => e.target.blur());
+    for (const id of ['harm', 'degree']) {
+      try { if (localStorage.getItem('score-editor.' + id) === 'off') $(id).checked = false; } catch { /* 記憶が読めなければ既定のまま */ }
+      $(id).addEventListener('change', (e) => {
+        try { localStorage.setItem('score-editor.' + id, e.target.checked ? 'on' : 'off'); } catch { /* 記憶できなくても切り替えは効く */ }
+        decorate();
+        updateStatus();
+        e.target.blur();
+      });
+    }
+    window.addEventListener('resize', () => decorate());
   }
 
   setupControls();
