@@ -57,7 +57,8 @@
   #paper { user-select: none; }
   #band { position: fixed; z-index: 10; border: 1px dashed #f59f00; background: rgba(245, 159, 0, 0.15); pointer-events: none; }
   .cur-end, .cur-end * { fill: var(--end) !important; }
-  .ghost, .ghost * { fill: var(--accent) !important; opacity: 0.4; }
+  .ghost, .ghost * { fill: var(--accent) !important; }
+  .ghost { opacity: 0.6; } /* 子要素に付けると親子で掛け算になって薄くなりすぎるので、外側だけに付ける */
   .playing, .playing * { fill: var(--play) !important; }
   [data-tok] { cursor: pointer; }
   #lyric { position: absolute; display: none; font: inherit; font-size: 15px; width: 7em; padding: 2px 4px; border: 2px solid var(--accent); border-radius: 4px; z-index: 5; background: var(--field); color: var(--ink); }
@@ -139,7 +140,7 @@
       <tr><td><kbd>R</kbd> / <kbd>0</kbd></td><td>休符</td></tr>
       <tr><td><kbd>Insert</kbd></td><td>上書き⇔挿入の切り替え。上書き（ふだんはこちら）は、入れた長さぶん後ろを上書きし、ほかの小節は動かない。挿入は手前に差し込み、後ろがずれる</td></tr>
       <tr><td><kbd>Z</kbd><kbd>X</kbd><kbd>C</kbd><kbd>V</kbd><kbd>B</kbd></td><td>次に入れる長さ: 全音符・2分・4分・8分・16分（数字の <kbd>1</kbd>〜<kbd>5</kbd> でも同じ）</td></tr>
-      <tr><td><kbd>Alt</kbd>+長さ</td><td>カーソルの音符の長さを変える（伸ばすと後ろを上書き、縮めると休符が残る）</td></tr>
+      <tr><td>長さキー・<kbd>.</kbd></td><td>カーソルの音符の長さ・付点も変える（伸ばすと後ろを上書き、縮めると休符が残る）。末尾では次に入れる長さだけ</td></tr>
       <tr><td><kbd>.</kbd></td><td>付点の切り替え</td></tr>
       <tr><td><kbd>T</kbd></td><td>タイ（同じ高さの音を後ろにつなぐ）</td></tr>
     </table>
@@ -148,8 +149,8 @@
       <tr><td><kbd>;</kbd> <kbd>-</kbd> <kbd>N</kbd></td><td>♯ ♭ ♮ を付ける（入れた直後の音符、またはカーソルの音符。範囲選択中は全部）。同じキーをもう一度で調号どおりに戻す</td></tr>
       <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>半音上げる・下げる</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></td><td>1オクターブ上げる・下げる</td></tr>
-      <tr><td><kbd>Delete</kbd></td><td>カーソルの音符を休符に戻す</td></tr>
-      <tr><td><kbd>Backspace</kbd></td><td>カーソルの手前を休符に戻す</td></tr>
+      <tr><td><kbd>Delete</kbd></td><td>カーソルの音符を消し、同じ小節の後ろを前に詰める（小節の終わりに休符が入る）。カーソルは次の音符へ</td></tr>
+      <tr><td><kbd>Backspace</kbd></td><td>Delete と同じ。末尾にいるときは、手前の音符を消す</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Delete</kbd></td><td>カーソルの小節を4声まとめて削除して詰める（範囲選択中は、選んだ小節すべて）</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd></td><td>元に戻す・やり直す</td></tr>
     </table>

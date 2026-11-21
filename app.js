@@ -444,9 +444,10 @@
   function commitGhost() {
     const g = ghost;
     const e = g.rest ? { rest: true, dur: g.dur } : { step: g.step, alter: g.alter, oct: g.oct, dur: g.dur, tie: false, lyric: '' };
+    // 確定した音符にカーソルを当てる（続けて → を押せば、次の仮の音符が出る）
     mutate(() => {
       events().push(e);
-      cur.idx = events().length;
+      cur.idx = events().length - 1;
     });
   }
 
@@ -652,17 +653,17 @@
     if (from > 0 && !ev[from - 1].rest) ev[from - 1].tie = false;
   }
 
-  // 長さキーは「次に入れる長さ」を決めるだけ。Alt を押しながらなら、カーソルの音符の長さも変える。
-  // 範囲選択中は、Alt の有無にかかわらず、選んだ音符・休符すべてをその長さにする。
-  function setBase(base, resize) {
+  // 長さキーは「次に入れる長さ」を決め、カーソルが音符・休符の上にあればその長さも変える（Alt の有無は問わない）。
+  // 範囲選択中は、選んだ音符・休符すべてをその長さにする。末尾（音符がない位置）では次に入れる長さだけ。
+  function setBase(base) {
     curDur = { base, dot: false };
     if (sel) resizeSelection(() => curTicks());
-    else if (resize && cur.idx < events().length) mutate(() => { resizeEvent(cur.idx, curTicks()); });
+    else if (cur.idx < events().length && events()[cur.idx].dur !== curTicks()) mutate(() => { resizeEvent(cur.idx, curTicks()); });
     else updateStatus();
   }
 
   // 範囲選択中は、選んだものそれぞれの付点を切り替える（全部に付点があれば外し、そうでなければ付ける）
-  function toggleDot(resize) {
+  function toggleDot() {
     if (sel) {
       const dotted = (d) => d % 3 === 0;
       const all = selEvents().every(({ e }) => dotted(e.dur));
@@ -670,9 +671,18 @@
       resizeSelection((d) => (all ? (d * 2) / 3 : dotted(d) || d * 1.5 > 48 || d < 2 ? d : d * 1.5));
       return;
     }
+    // カーソルが音符・休符の上なら、その音符の付点を切り替える（次に入れる長さもそれに合わせる）
+    if (cur.idx < events().length) {
+      const d = events()[cur.idx].dur;
+      const dotted = d % 3 === 0;
+      const next = dotted ? (d * 2) / 3 : d * 1.5;
+      if (!dotted && (d < 2 || next > 48)) return;
+      curDur = { base: dotted ? next : d, dot: !dotted };
+      mutate(() => { resizeEvent(cur.idx, next); });
+      return;
+    }
     curDur.dot = !curDur.dot;
-    if (resize && cur.idx < events().length) mutate(() => { resizeEvent(cur.idx, curTicks()); });
-    else updateStatus();
+    updateStatus();
   }
 
   // 選択中の音符・休符を [{ part, idx, e }] で返す（入力用の末尾の空きは含めない）
@@ -878,12 +888,39 @@
     });
   }
 
+  // Delete / Backspace で音符を1つ消す。
+  // 上書きモードでは、同じ小節の中でそれより後ろの音符・休符を前に詰め、小節の終わりに消した長さぶんの休符を足す
+  // （ほかの小節の位置は動かない）。挿入モードでは、そのパートの後ろ全体が詰まる。
+  // カーソルは、消した音符の次にあった音符に置く（末尾で手前を消したときは末尾のまま）。
   function deleteAt(idx) {
-    if (idx < 0 || idx >= events().length) return;
+    const ev = events();
+    if (idx < 0 || idx >= ev.length) return;
+    const target = idx === cur.idx ? ev[idx + 1] : ev[cur.idx];
     mutate(() => {
-      eraseRange(cur.part, idx, idx);
-      cur.idx = idx;
+      if (insertMode || idx === ev.length - 1) eraseRange(cur.part, idx, idx);
+      else removeInMeasure(cur.part, idx);
+      const at = target ? events().indexOf(target) : -1;
+      cur.idx = at >= 0 ? at : Math.min(idx, events().length);
     });
+  }
+
+  function removeInMeasure(partIdx, idx) {
+    const ev = score.parts[partIdx].events;
+    const e = ev[idx];
+    const s = startTick(partIdx, idx);
+    const g = M.grid(score);
+    const gm = g.at(g.find(s));
+    const me = gm.start + gm.len;
+    // 小節線をまたいでいる音符は、詰めると次の小節まで動くので、今までどおり休符に戻す
+    if (s + e.dur > me) { eraseRange(partIdx, idx, idx); return; }
+    // 同じ小節の中に収まっている後ろの音符を数える（小節線をまたぐ音符の手前まで）
+    let t = s + e.dur;
+    let j = idx + 1;
+    while (j < ev.length && t + ev[j].dur <= me) { t += ev[j].dur; j++; }
+    ev.splice(idx, 1);
+    // 後ろに何も続かないなら、休符を足す必要はない（パートがそこで終わる）
+    if (j - 1 < ev.length) ev.splice(j - 1, 0, { rest: true, dur: e.dur });
+    if (idx > 0 && !ev[idx - 1].rest) ev[idx - 1].tie = false;
   }
 
   // 小節ごと削除（4声まとめて）。範囲選択中なら、選んだ音符がかかる小節をすべて消す。
@@ -1198,15 +1235,64 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
   }
 
+  // 前回保存したファイルのハンドルを IndexedDB に覚えておき、
+  // 次回の保存ダイアログを同じフォルダで開く（localStorage は文字列しか持てず、ハンドルを保存できない）
+  function idb() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('score-editor', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function kvGet(key) {
+    const db = await idb();
+    return new Promise((res, rej) => {
+      const q = db.transaction('kv').objectStore('kv').get(key);
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => rej(q.error);
+    });
+  }
+  async function kvSet(key, val) {
+    const db = await idb();
+    return new Promise((res, rej) => {
+      const q = db.transaction('kv', 'readwrite').objectStore('kv').put(val, key);
+      q.onsuccess = () => res();
+      q.onerror = () => rej(q.error);
+    });
+  }
+
+  async function rememberFile(h) {
+    try { await kvSet('lastFile', h); } catch { /* 覚えられなくても保存・読込はできている */ }
+  }
+
+  // 保存・開くの両ダイアログ共通: 最後に保存／開いたファイルのフォルダで開く。
+  // startIn に前回のファイルハンドルを渡すと、そのファイルのあるフォルダで開く。
+  // ハンドルが古くて使えない場合は startIn なしで開き直す
+  async function pickFile(picker, opts) {
+    let last = null;
+    try { last = (await kvGet('lastFile')) || (await kvGet('lastSaveFile')); } catch { /* 取れなければ覚えていないのと同じ */ }
+    try {
+      return await picker(last ? { ...opts, startIn: last } : opts);
+    } catch (err) {
+      if (err && err.name === 'AbortError') throw err;
+      if (last) return await picker(opts);
+      throw err;
+    }
+  }
+
   async function saveJson() {
     const text = JSON.stringify(M.toJson(score), null, 1);
     const name = baseName() + '.json';
     if (window.showSaveFilePicker) {
       try {
-        const h = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: '楽譜（JSON）', accept: { 'application/json': ['.json'] } }] });
+        // id を付けると、ブラウザもこのダイアログ専用に前回の場所を覚える（startIn との二段構え）
+        const h = await pickFile((o) => window.showSaveFilePicker(o),
+          { id: 'score-json', suggestedName: name, types: [{ description: '楽譜（JSON）', accept: { 'application/json': ['.json'] } }] });
         const w = await h.createWritable();
         await w.write(text);
         await w.close();
+        await rememberFile(h);
         say('');
         return;
       } catch (err) {
@@ -1223,6 +1309,30 @@
     score = next;
     cur = { part: 0, idx: 0 };
     render();
+  }
+
+  async function openJson() {
+    if (!window.showOpenFilePicker) {
+      $('file').click();  // 非対応ブラウザは従来のファイル選択
+      return;
+    }
+    let h;
+    try {
+      [h] = await pickFile((o) => window.showOpenFilePicker(o),
+        { id: 'score-json', multiple: false, types: [{ description: '楽譜（JSON）', accept: { 'application/json': ['.json'] } }] });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      $('file').click();  // ダイアログ自体が開けないときだけ従来の方法へ
+      return;
+    }
+    try {
+      const f = await h.getFile();
+      loadScore(M.fromJson(JSON.parse(await f.text())));
+      await rememberFile(h);  // 開いた場所も覚える（次の保存・開くが同じフォルダで開く）
+      say('');
+    } catch (err) {
+      say('読み込めませんでした: ' + err.message);
+    }
   }
 
   $('file').addEventListener('change', async (e) => {
@@ -1315,9 +1425,9 @@
     else if (ctrl) handled = false;
     else if (e.altKey && code === 'ArrowUp') switchPart(-1);
     else if (e.altKey && code === 'ArrowDown') switchPart(1);
-    else if (e.altKey && code in DUR_LETTER_KEYS) setBase(DUR_LETTER_KEYS[code], true);
-    else if (e.altKey && digit && DUR_KEYS[digit[1]]) setBase(DUR_KEYS[digit[1]], true);
-    else if (e.altKey && (code === 'Period' || code === 'NumpadDecimal')) toggleDot(true);
+    else if (e.altKey && code in DUR_LETTER_KEYS) setBase(DUR_LETTER_KEYS[code]);
+    else if (e.altKey && digit && DUR_KEYS[digit[1]]) setBase(DUR_KEYS[digit[1]]);
+    else if (e.altKey && (code === 'Period' || code === 'NumpadDecimal')) toggleDot();
     else if (e.altKey) handled = false;
     else if (code in NOTE_KEYS) enterNote(NOTE_KEYS[code]);
     else if (code in ACC_KEYS) setAccidental(ACC_KEYS[code], justEntered);
@@ -1345,7 +1455,8 @@
     else if (code === 'PageUp') switchPart(-1);
     else if (code === 'PageDown') switchPart(1);
     else if (code === 'Delete') { if (!deleteSelection()) deleteAt(cur.idx); }
-    else if (code === 'Backspace') { if (!deleteSelection()) deleteAt(cur.idx - 1); }
+    // Backspace も Delete と同じ（カーソルの音符を消す）。末尾にいるときだけは、手前の音符を消す
+    else if (code === 'Backspace') { if (!deleteSelection()) deleteAt(cur.idx < events().length ? cur.idx : cur.idx - 1); }
     else if (code === 'Space') {
       if (playing) stopPlay();
       else play(e.shiftKey ? 0 : startTick(cur.part, cur.idx));
@@ -1400,7 +1511,7 @@
 
     const click = (id, fn) => $(id).addEventListener('click', (e) => { e.currentTarget.blur(); fn(); });
     click('btnNew', () => { if (confirm('今の楽譜を閉じて、新しい楽譜を始めますか？（Ctrl+Z で戻せます）')) loadScore(M.newScore(score.ensemble)); });
-    click('btnOpen', () => $('file').click());
+    click('btnOpen', () => { openJson(); });
     click('btnSave', saveJson);
     click('btnPlay', () => play(startTick(cur.part, cur.idx)));
     click('btnPlayTop', () => play(0));
