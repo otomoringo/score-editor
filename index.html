@@ -55,8 +55,6 @@
   .sel, .sel * { fill: #f59f00 !important; }
   .cur, .cur * { fill: var(--accent) !important; }
   #paper { user-select: none; }
-  /* 4分の4拍子の小節休符（Z）に abcjs が付ける「1」を出さない（1小節だけの休みなので数字は不要） */
-  #paper text.abcjs-rest { display: none; }
   #band { position: fixed; z-index: 10; border: 1px dashed #f59f00; background: rgba(245, 159, 0, 0.15); pointer-events: none; }
   .cur-end, .cur-end * { fill: var(--end) !important; }
   .playing, .playing * { fill: var(--play) !important; }
