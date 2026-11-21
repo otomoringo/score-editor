@@ -97,30 +97,33 @@
     return p > 0 && p < measureTicks(score) ? p : 0;
   };
 
-  // 小節ごとの開始位置・長さ・拍子・調を返す。score.changes（曲の途中の拍子・調の変更。
-  // {measure: 0始まりの小節番号, time?, key?} の配列）を反映する。
+  // 小節ごとの開始位置・長さ・拍子・調・テンポを返す。score.changes（曲の途中の拍子・調・テンポの変更。
+  // {measure: 0始まりの小節番号, time?, key?, tempo?} の配列）を反映する。テンポは4分音符の速さ（♩=）。
   function grid(score) {
     const changes = [...(score.changes || [])].sort((a, b) => a.measure - b.measure);
     const ms = [];
     const pickup = pickupTicks(score);
     let time = score.time;
     let key = score.key;
+    let tempo = score.tempo;
     let ci = 0;
     const extend = (n) => {
       while (ms.length <= n) {
         const m = ms.length;
         let timeChanged = false;
         let keyChanged = false;
+        let tempoChanged = false;
         while (ci < changes.length && changes[ci].measure <= m) {
           if (changes[ci].time) { time = changes[ci].time; timeChanged = true; }
           if (changes[ci].key) { key = changes[ci].key; keyChanged = true; }
+          if (changes[ci].tempo) { tempo = changes[ci].tempo; tempoChanged = true; }
           ci++;
         }
         const start = m ? ms[m - 1].start + ms[m - 1].len : 0;
         const full = (time.beats * 32) / time.beatType;
         // 弱起の小節は短い。off は「本来の小節のどこから始まるか」で、拍の区切りや連桁をそろえるのに使う。
         const pk = m === 0 ? pickup : 0;
-        ms.push({ start, len: pk || full, off: pk ? full - pk : 0, pickup: pk > 0, number: pickup ? m : m + 1, time, key, timeChanged, keyChanged });
+        ms.push({ start, len: pk || full, off: pk ? full - pk : 0, pickup: pk > 0, number: pickup ? m : m + 1, time, key, tempo, timeChanged, keyChanged, tempoChanged });
       }
     };
     return {
@@ -133,12 +136,13 @@
     };
   }
 
-  // measure 小節目（0始まり）からの拍子・調を設定する。0 なら曲全体の最初の値を変える。
+  // measure 小節目（0始まり）からの拍子・調・テンポを設定する。0 なら曲全体の最初の値を変える。
   // 直前と同じ値になった変更は取り除く。
   function setChange(score, measure, patch) {
     if (measure <= 0) {
       if (patch.time) score.time = patch.time;
       if (patch.key) score.key = patch.key;
+      if (patch.tempo) score.tempo = patch.tempo;
     } else {
       const list = score.changes || (score.changes = []);
       let c = list.find((x) => x.measure === measure);
@@ -148,16 +152,35 @@
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     let time = score.time;
     let key = score.key;
+    let tempo = score.tempo;
     score.changes = (score.changes || [])
       .sort((a, b) => a.measure - b.measure)
       .map((c) => {
         const out = { measure: c.measure };
         if (c.time && !same(c.time, time)) { out.time = c.time; time = c.time; }
         if (c.key && !same(c.key, key)) { out.key = c.key; key = c.key; }
+        if (c.tempo && c.tempo !== tempo) { out.tempo = c.tempo; tempo = c.tempo; }
         return out;
       })
-      .filter((c) => c.time || c.key);
+      .filter((c) => c.time || c.key || c.tempo);
   }
+
+  // 曲の頭から tick までの演奏時間（秒）。小節ごとのテンポで数える。
+  function secondsAt(score, tick) {
+    const g = grid(score);
+    let sec = 0;
+    for (let m = 0; ; m++) {
+      const gm = g.at(m);
+      const take = Math.min(gm.len, tick - gm.start);
+      if (take <= 0) break;
+      sec += (take / 8) * (60 / gm.tempo);
+      if (take < gm.len) break;
+    }
+    return sec;
+  }
+
+  // ABC記法のテンポ。8分の6拍子などの複合拍子では、その拍子の楽譜の書き方に合わせて8分音符で表す。
+  const abcTempo = (tempo, time) => (time.beatType === 8 ? `1/8=${tempo * 2}` : `1/4=${tempo}`);
 
   // 弱起の長さを変える。0 なら弱起なし。
   // どう変えても、音符と小節線の位置関係（何拍目にあるか）は変えない。
@@ -299,7 +322,7 @@
     let out = 'X:1\n';
     if (oneLine(score.title)) out += `T:${oneLine(score.title)}\n`;
     if (oneLine(score.composer)) out += `C:${oneLine(score.composer)}\n`;
-    out += `M:${score.time.beats}/${score.time.beatType}\nL:1/32\nQ:1/4=${score.tempo}\n`;
+    out += `M:${score.time.beats}/${score.time.beatType}\nL:1/32\nQ:${abcTempo(score.tempo, score.time)}\n`;
     out += '%%stretchlast 1\n';
     out += `%%score [${score.parts.map((p) => p.id).join(' ')}]\n`;
     for (const p of score.parts) out += `V:${p.id} clef=${p.clef} name="${p.id}"\n`;
@@ -324,6 +347,8 @@
           const beat = beatOf(gm.time);
           if (m > 0 && gm.timeChanged) out += `[M:${gm.time.beats}/${gm.time.beatType}]`;
           if (m > 0 && gm.keyChanged) out += `[K:${keyName(gm.key)} clef=${part.clef}]`;
+          // テンポは曲全体に効くので、いちばん上の段にだけ書く（全段に書くと記号が段の数だけ並ぶ）
+          if (m > 0 && gm.tempoChanged && pi === 0) out += `[Q:${abcTempo(gm.tempo, gm.time)}]`;
           for (const it of measures[m]) {
             if (it.pos > 0 && (it.pos + gm.off) % beat === 0) out += ' ';
             const start = out.length;
@@ -419,6 +444,7 @@
         const out = { measure: c.measure };
         if (c.time && c.time.beats > 0 && [2, 4, 8].includes(c.time.beatType)) out.time = { beats: c.time.beats, beatType: c.time.beatType };
         if (c.key && Number.isInteger(c.key.fifths) && Math.abs(c.key.fifths) <= 7) out.key = { fifths: c.key.fifths, mode: c.key.mode === 'minor' ? 'minor' : 'major' };
+        if (c.tempo > 0) out.tempo = Math.round(c.tempo);
         return out;
       });
     const scale = DIV / (obj.divisions || DIV);
@@ -500,6 +526,12 @@
           }
         }
         const gm = L.grid.at(m);
+        if (m > 0 && gm.tempoChanged && pi === 0) {
+          x.push('      <direction placement="above">');
+          x.push(`        <direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${gm.tempo}</per-minute></metronome></direction-type>`);
+          x.push(`        <sound tempo="${gm.tempo}"/>`);
+          x.push('      </direction>');
+        }
         if (m > 0 && (gm.timeChanged || gm.keyChanged)) {
           x.push('      <attributes>');
           if (gm.keyChanged) x.push(`        <key><fifths>${gm.key.fifths}</fifths><mode>${gm.key.mode}</mode></key>`);
@@ -543,7 +575,7 @@
   const api = {
     DIV, MAJOR, MINOR, STEP_SEMI, ENSEMBLES,
     newScore, setEnsemble, keyName, keyAlter, midi, samePitch, measureTicks, beatTicks, partTicks,
-    pickupTicks, setPickup, grid, setChange, layout, toAbc, toJson, fromJson, toMusicXml,
+    pickupTicks, setPickup, grid, setChange, secondsAt, layout, toAbc, toJson, fromJson, toMusicXml,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ScoreModel = api;

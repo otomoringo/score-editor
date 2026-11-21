@@ -310,7 +310,7 @@
     set($('time'), `${gm.time.beats}/${gm.time.beatType}`);
     syncPickupOptions();
     set($('pickup'), String(M.pickupTicks(score)));
-    set($('tempo'), score.tempo);
+    set($('tempo'), gm.tempo);
     set($('inst'), score.instrument);
     set($('ensemble'), score.ensemble);
     document.querySelectorAll('.mlabel').forEach((el, i) => { el.textContent = score.parts[i].id; });
@@ -853,7 +853,8 @@
       return;
     }
     if (synth !== mine) return; // 準備中に止められた
-    const frac = Math.min(0.999, Math.max(0, fromTick / info.totalTicks));
+    // 途中でテンポが変わる曲では、拍の割合と時間の割合がずれるので、時間で位置を決める
+    const frac = Math.min(0.999, Math.max(0, M.secondsAt(score, fromTick) / M.secondsAt(score, info.totalTicks)));
     timing = new ABCJS.TimingCallbacks(visualObj, {
       eventCallback: (ev) => {
         if (!ev) { stopPlay(); return; }
@@ -1059,7 +1060,7 @@
     onChange('key', (v) => { const [f, mode] = v.split('|'); M.setChange(score, scopeMeasure(), { key: { fifths: Number(f), mode } }); });
     onChange('time', (v) => { const [b, t] = v.split('/').map(Number); M.setChange(score, scopeMeasure(), { time: { beats: b, beatType: t } }); });
     onChange('pickup', (v) => { M.setPickup(score, Number(v)); });
-    onChange('tempo', (v) => { score.tempo = Math.max(30, Math.min(240, Math.round(Number(v)) || 90)); });
+    onChange('tempo', (v) => { M.setChange(score, scopeMeasure(), { tempo: Math.max(20, Math.min(240, Math.round(Number(v)) || 90)) }); });
     onChange('inst', (v) => { score.instrument = v; });
     for (const [id, def] of Object.entries(M.ENSEMBLES)) $('ensemble').add(new Option(def.label, id));
     onChange('ensemble', (v) => { M.setEnsemble(score, v); });

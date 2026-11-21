@@ -5,6 +5,8 @@
 //   「@ensemble female」（mixed / female / male）「@composer 名前」
 //   「@part S1」でパートを切り替える。どのパートも1小節目から書く
 //   「@key」「@time」は最初のパートに書く。2つ目以降のパートでは書かなくてよい（小節番号で引き継ぐ）
+//   「@tempo 90」は4分音符の速さ（♩=）。最初のパートより前に書けば曲の最初のテンポ、
+//     最初のパートの途中に書けば、次の小節からのテンポになる（8分の6拍子の♪=108 は @tempo 54）
 //   「@pickup q」は弱起（アウフタクト）。長さは音符と同じ書き方（q=4分、e=8分、q.=付点4分 など）。
 //     最初のパートより前に書く。どのパートも1行目が弱起の小節になる
 //   「@fill A2」は、そのパートを曲の長さぶんの休符で埋める
@@ -24,6 +26,7 @@ const DUR = { w: 32, h: 16, q: 8, e: 4, s: 2 };
 const lines = fs.readFileSync(inFile, 'utf8').split(/\r?\n/);
 const head = {};
 for (const raw of lines) {
+  if (/^@part\s/.test(raw.trim())) break; // ここから先は本文（途中の @tempo はテンポ変更）
   const m = /^@(ensemble|title|composer|tempo|pickup)\s+(.*)$/.exec(raw.trim());
   if (m) head[m[1]] = m[2].trim();
 }
@@ -69,6 +72,13 @@ lines.forEach((raw, i) => {
       const m = /^([whqes])(\.?)$/.exec(arg);
       if (!m) throw new Error(`${lineNo}行目: 弱起の長さ「${arg}」が読めません`);
       pickup = DUR[m[1]] * (m[2] ? 1.5 : 1);
+      return;
+    }
+    if (cmd === 'tempo' && firstPart) {
+      if (partId !== firstPart) return; // 2つ目以降のパートでは無視
+      const t = Number(arg);
+      if (!(t > 0)) throw new Error(`${lineNo}行目: テンポ「${arg}」が読めません`);
+      M.setChange(score, (parts[partId] || []).length, { tempo: Math.round(t) });
       return;
     }
     if (['ensemble', 'title', 'composer', 'tempo'].includes(cmd)) return;
