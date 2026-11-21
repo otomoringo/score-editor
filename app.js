@@ -91,6 +91,16 @@
     return audioCtx;
   }
 
+  // 最初のクリックやキー入力で音を出せる状態にしておく（そのあとは Shift+マウスだけでも鳴る）
+  const unlockAudio = () => {
+    if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
+    ctx();
+    window.removeEventListener('pointerdown', unlockAudio, true);
+    window.removeEventListener('keydown', unlockAudio, true);
+  };
+  window.addEventListener('pointerdown', unlockAudio, true);
+  window.addEventListener('keydown', unlockAudio, true);
+
   function loadNote(inst, midi) {
     const key = inst + ':' + midi;
     if (!buffers.has(key)) {
@@ -1036,7 +1046,7 @@
     setTimeout(() => { justDragged = false; }, 0);
   });
 
-  // マウスを乗せて和音を聴く: 段組のどこ（音符の上、歌詞、五線の間）にいても、
+  // Shift+マウスで和音を聴く: 段組のどこ（音符の上、歌詞、五線の間）にいても、
   // マウスの横位置にある拍の和音を鳴らし、その位置に縦棒を出す。
 
   // 段組ごとに「どの横位置がどの拍か」を調べる（紙の左上からの位置）。描き直しのたびに作り直す。
@@ -1076,11 +1086,27 @@
     if (hoverBar) hoverBar.style.display = 'none';
   }
 
+  // Shift を押しているあいだだけ鳴らす。マウスを動かしたとき、または段組の上で Shift を押したときに鳴る。
+  // Shift+鍵盤（オクターブを変えて入力）で毎回鳴らないように、Shift を押してすぐ別のキーが来たら鳴らさない。
+  let lastMouse = null; // 段組の上にあるマウスの位置（画面上の座標）
+  let shiftTimer = 0;
+  const shiftDown = (e) => e.shiftKey || shiftLeft || shiftRight;
+
   paper.addEventListener('mousemove', (e) => {
-    if (!$('hover').checked || playing || lyricOpen || band || printing) { hideHoverBar(); return; }
+    lastMouse = { x: e.clientX, y: e.clientY };
+    hoverAt(e.clientX, e.clientY, shiftDown(e));
+  });
+  document.addEventListener('keydown', (e) => {
+    clearTimeout(shiftTimer);
+    if (e.key !== 'Shift' || e.repeat || !lastMouse) return;
+    shiftTimer = setTimeout(() => { if (lastMouse && (shiftLeft || shiftRight)) hoverAt(lastMouse.x, lastMouse.y, true); }, 200);
+  });
+
+  function hoverAt(clientX, clientY, shift) {
+    if (!shift || !$('hover').checked || playing || lyricOpen || band || printing) { hideHoverBar(); return; }
     const pr = paper.getBoundingClientRect();
-    const x = e.clientX - pr.left;
-    const y = e.clientY - pr.top;
+    const x = clientX - pr.left;
+    const y = clientY - pr.top;
     const sys = hoverColumns().find((s) => y >= s.top && y < s.bottom);
     let col = null;
     // マウスのすぐ左にある拍（音符の少し手前でもその音符を拾う）
@@ -1097,9 +1123,15 @@
     hoverBar.style.height = (sys.barBottom - sys.barTop) + 'px';
     if (col.tick === hoverTick) return;
     hoverTick = col.tick;
+    // ブラウザは、ページを開いてからクリックなどの操作があるまで音を出させない（マウスを動かす・Shift だけでは足りない）
+    if (navigator.userActivation && !navigator.userActivation.hasBeenActive) {
+      say('音を鳴らすには、まず楽譜を一度クリックしてください（ページを開いた直後は、クリックするまでブラウザが音を止めています）');
+      return;
+    }
     playNotes(chordAt(col.tick), 0.8);
-  });
-  paper.addEventListener('mouseleave', hideHoverBar);
+  }
+  paper.addEventListener('mouseleave', () => { lastMouse = null; hideHoverBar(); });
+  document.addEventListener('keyup', (e) => { if (e.key === 'Shift') { clearTimeout(shiftTimer); hideHoverBar(); } });
 
   // ---------- 再生（abcjs） ----------
 
