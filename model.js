@@ -328,6 +328,8 @@
     for (const p of score.parts) out += `V:${p.id} clef=${p.clef} name="${p.id}"\n`;
     out += `K:${keyName(score.key)}\n`;
     const hasKeyChange = (score.changes || []).some((c) => c.key);
+    // パートごとに「直前の音符がタイで終わったか」を、小節や段をまたいで覚えておく
+    const tieIn = score.parts.map(() => false);
     // 弱起の小節は1段目のおまけにする（1段目だけ1小節多い）
     const lineEnd = (s) => Math.min(L.total, s + MEASURES_PER_LINE + (s === 0 && L.grid.at(0).pickup ? 1 : 0));
     for (let s = 0; s < L.total; s = lineEnd(s)) {
@@ -357,16 +359,24 @@
               // 曲頭が4分の4拍子でない曲（3拍子で始まり途中から4拍子など）では、表示の小節線も再生のタイミングもずれる。
               // そういう曲では2分休符2つに分けて書く（5曲で表示と再生の両方を確認済み）
               out += it.dur === 32 && measureTicks(score) !== 32 ? 'z16z16' : 'z' + it.dur;
+              tieIn[pi] = false;
             } else {
               const e = it.e;
               const k = e.step + e.oct;
               const current = k in state ? state[k] : keyAlter(gm.key, e.step);
+              // 前の小節からタイで続く音は、臨時記号を書いても abcjs がその小節の臨時記号として数えない
+              // （同じ小節の後ろの同じ音が調号どおりに鳴る）。続きの音は臨時記号を明示し、小節の状態には記録しない。
+              // 記譜の決まりとしても、タイの続きの音の臨時記号は後ろの音に効かない。
+              const tiedOver = tieIn[pi] && it.pos === 0;
               let acc = '';
-              if (e.alter !== current) {
+              if (tiedOver) {
+                if (e.alter !== keyAlter(gm.key, e.step)) acc = ACC[e.alter];
+              } else if (e.alter !== current) {
                 acc = ACC[e.alter];
                 state[k] = e.alter;
               }
               out += acc + abcPitch(e.step, e.oct + shift) + it.dur + (it.tie ? '-' : '');
+              tieIn[pi] = !!it.tie;
               if (it.first && e.lyric) {
                 hasLyric = true;
                 lyrics.push(lyricToken(e.lyric));
