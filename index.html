@@ -29,7 +29,7 @@
   #status { background: #1d2330; color: #e9ecef; padding: 4px 10px; display: flex; gap: 18px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
   #status b { color: #ffd43b; font-weight: 600; }
   #main { flex: 1; display: flex; min-height: 0; }
-  #scroll { flex: 1; overflow: auto; padding: 12px; position: relative; }
+  #scroll { flex: 1; overflow: auto; padding: var(--center-pad, 12px) 12px; position: relative; }
   #paper { background: var(--paper); color: var(--ink); border: 1px solid var(--line); max-width: 1100px; margin: 0 auto; padding: 8px 12px; }
   #paper svg { display: block; }
   #help { width: 290px; overflow: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 10px 12px; }
@@ -57,6 +57,7 @@
   #paper { user-select: none; }
   #band { position: fixed; z-index: 10; border: 1px dashed #f59f00; background: rgba(245, 159, 0, 0.15); pointer-events: none; }
   .cur-end, .cur-end * { fill: var(--end) !important; }
+  .ghost, .ghost * { fill: var(--accent) !important; opacity: 0.4; }
   .playing, .playing * { fill: var(--play) !important; }
   [data-tok] { cursor: pointer; }
   #lyric { position: absolute; display: none; font: inherit; font-size: 15px; width: 7em; padding: 2px 4px; border: 2px solid var(--accent); border-radius: 4px; z-index: 5; background: var(--field); color: var(--ink); }
@@ -149,6 +150,7 @@
       <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></td><td>1オクターブ上げる・下げる</td></tr>
       <tr><td><kbd>Delete</kbd></td><td>カーソルの音符を休符に戻す</td></tr>
       <tr><td><kbd>Backspace</kbd></td><td>カーソルの手前を休符に戻す</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Delete</kbd></td><td>カーソルの小節を4声まとめて削除して詰める（範囲選択中は、選んだ小節すべて）</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd></td><td>元に戻す・やり直す</td></tr>
     </table>
     <h3>範囲選択とコピー</h3>
@@ -158,11 +160,15 @@
       <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>X</kbd></td><td>コピー／切り取り</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>カーソル位置に貼り付け（その長さぶん上書き）</td></tr>
       <tr><td><kbd>Delete</kbd></td><td>選択した音符を休符に戻す</td></tr>
+      <tr><td>長さキー・<kbd>.</kbd></td><td>選択した音符をすべてその長さにする／付点を付ける・外す</td></tr>
+      <tr><td><kbd>↑</kbd><kbd>↓</kbd> <kbd>Ctrl</kbd>+<kbd>↑</kbd><kbd>↓</kbd></td><td>選択した音符をまとめて半音・1オクターブ上げ下げ</td></tr>
+      <tr><td><kbd>;</kbd> <kbd>-</kbd> <kbd>N</kbd></td><td>選択した音符すべてに ♯ ♭ ♮</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>選択を解除</td></tr>
     </table>
     <h3>移動</h3>
     <table>
       <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>前後の音符へ</td></tr>
+      <tr><td>末尾で <kbd>→</kbd></td><td>薄い仮の音符を出す。高さ・長さ・付点・♯♭♮を変えて <kbd>Enter</kbd> で追加、<kbd>Esc</kbd> で取り消し</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>前後の小節へ</td></tr>
       <tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>パートの先頭・末尾へ</td></tr>
       <tr><td><kbd>PageUp</kbd> / <kbd>PageDown</kbd></td><td>上・下のパートへ（<kbd>Alt</kbd>+<kbd>↑</kbd><kbd>↓</kbd> でも可）</td></tr>

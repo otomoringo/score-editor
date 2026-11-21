@@ -149,6 +149,11 @@
       if (!c) { c = { measure }; list.push(c); }
       Object.assign(c, patch);
     }
+    tidyChanges(score);
+  }
+
+  // 拍子・調・テンポの変更を、小節順に並べて直前と同じ値のものを取り除く
+  function tidyChanges(score) {
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     let time = score.time;
     let key = score.key;
@@ -163,6 +168,59 @@
         return out;
       })
       .filter((c) => c.time || c.key || c.tempo);
+  }
+
+  // from〜to 小節目（0始まり、両端を含む）を、全パートから取り除いて後ろを詰める。
+  // 小節をまたいで入り込んでいる音符は、残る側の長さだけに縮める。
+  // 曲の途中の拍子・調・テンポの変更は、後ろの小節に付いていたものを同じ小節に付いたまま前へずらす。
+  // 消した小節の中で始まっていた変更は、消した範囲のすぐ後ろの小節に引き継ぐ（そこから先の調・拍子は変わらない）。
+  function deleteMeasures(score, from, to) {
+    const g = grid(score);
+    from = Math.max(0, Math.floor(from));
+    to = Math.max(from, Math.floor(to));
+    const a = g.at(from).start;
+    const b = g.at(to).start + g.at(to).len;
+    const n = to - from + 1;
+    for (const p of score.parts) {
+      const out = [];
+      let t = 0;
+      for (const e of p.events) {
+        const s = t;
+        const end = t + e.dur;
+        t = end;
+        if (end <= a || s >= b) { out.push(e); continue; }
+        // 消す範囲にかかる音符。前か後ろにはみ出した部分だけ残す
+        const keep = Math.max(0, a - s) + Math.max(0, end - b);
+        if (keep > 0) out.push({ ...e, dur: keep });
+      }
+      // 消した範囲の手前で終わる音符のタイは外す（詰めた後ろの音と勝手につながらないように）
+      let t2 = 0;
+      for (const e of out) {
+        t2 += e.dur;
+        if (t2 === a && e.tie) delete e.tie;
+      }
+      p.events = out;
+    }
+    // 弱起の小節を消したら弱起なしにする
+    if (from === 0 && pickupTicks(score)) score.pickup = 0;
+    // 変更の小節番号をずらす。消した範囲の中の変更は from に集めて、小節の順に重ねる
+    // （後ろの小節の変更ほど優先。もともと to+1 小節目にあった変更がいちばん優先）
+    const order = [...(score.changes || [])].sort((x, y) => x.measure - y.measure);
+    const merged = [];
+    for (const c of order) {
+      const m = c.measure < from ? c.measure : c.measure <= to ? from : c.measure - n;
+      const last = merged[merged.length - 1];
+      if (last && last.measure === m) Object.assign(last, c, { measure: m });
+      else merged.push({ ...c, measure: m });
+    }
+    // 小節0に来た変更は、曲の最初の値にする
+    for (const c of merged.filter((x) => x.measure <= 0)) {
+      if (c.time) score.time = c.time;
+      if (c.key) score.key = c.key;
+      if (c.tempo) score.tempo = c.tempo;
+    }
+    score.changes = merged.filter((c) => c.measure > 0);
+    tidyChanges(score);
   }
 
   // 曲の頭から tick までの演奏時間（秒）。小節ごとのテンポで数える。
@@ -596,7 +654,7 @@
   const api = {
     DIV, MAJOR, MINOR, STEP_SEMI, ENSEMBLES,
     newScore, setEnsemble, keyName, keyAlter, midi, samePitch, measureTicks, beatTicks, partTicks,
-    pickupTicks, setPickup, grid, setChange, secondsAt, layout, toAbc, toJson, fromJson, toMusicXml,
+    pickupTicks, setPickup, grid, setChange, deleteMeasures, secondsAt, layout, toAbc, toJson, fromJson, toMusicXml,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ScoreModel = api;

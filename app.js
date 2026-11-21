@@ -44,6 +44,9 @@
   let hoverBar = null;
   let insertMode = false;
   let lastEntered = null; // 直前に鍵盤で入れた音符（臨時記号のキーはこの音符に付ける）
+  // 仮の音符。パートの末尾で → を押すと出る薄い音符で、高さ・長さ・臨時記号を変えてから Enter で確定する。
+  // { step, alter, oct, dur, rest } または null
+  let ghost = null;
   let sel = null; // 範囲選択。{ パート番号: [最初の音符, 最後の音符] }
   let selAnchor = null;
   let clip = null; // コピーした内容。[{ offset: 一番上の段からの段数, events }]
@@ -135,8 +138,16 @@
 
   // ---------- 表示 ----------
 
+  // 仮の音符を末尾に足した、表示用の楽譜（score そのものは変えない）
+  function viewScore() {
+    if (!ghost || printing) return score;
+    const g = ghost.rest ? { rest: true, dur: ghost.dur } : { step: ghost.step, alter: ghost.alter, oct: ghost.oct, dur: ghost.dur, tie: false, lyric: '' };
+    return { ...score, parts: score.parts.map((p, i) => (i === cur.part ? { ...p, events: [...p.events, g] } : p)) };
+  }
+
   function render() {
-    const r = M.toAbc(score, { forEdit: !printing });
+    updateCenterPad();
+    const r = M.toAbc(viewScore(), { forEdit: !printing });
     toks = r.toks;
     info = r;
     visualObj = ABCJS.renderAbc('paper', r.abc, {
@@ -150,6 +161,9 @@
     mapElements();
     highlight();
     decorate();
+    // 和音の表示で段の高さが変わるので、付け終わってから真ん中に合わせ直す
+    const c = paper.querySelector('.cur, .cur-end');
+    if (c) centerLine(c, false);
     updateStatus();
     syncControls();
     if (!printing) {
@@ -228,6 +242,7 @@
 
   function cursorToks() {
     const len = events().length;
+    if (ghost && !printing) return { list: toks.filter((x) => x.part === cur.part && !x.pad && x.idx === len), cls: 'ghost' };
     if (cur.idx >= len) {
       const t = toks.find((x) => x.part === cur.part && x.pad);
       return { list: t ? [t] : [], cls: 'cur-end' };
@@ -236,7 +251,7 @@
   }
 
   function highlight() {
-    paper.querySelectorAll('.cur, .cur-end, .sel').forEach((el) => el.classList.remove('cur', 'cur-end', 'sel'));
+    paper.querySelectorAll('.cur, .cur-end, .sel, .ghost').forEach((el) => el.classList.remove('cur', 'cur-end', 'sel', 'ghost'));
     if (printing) return;
     if (sel) {
       for (const t of toks) {
@@ -247,7 +262,25 @@
     const { list, cls } = cursorToks();
     let first = null;
     for (const t of list) for (const el of t.els) { el.classList.add(cls); first = first || el; }
-    if (first && first.scrollIntoView) first.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (first) centerLine(first, false);
+  }
+
+  // el を含む段（4声ぶんの1段）の中心が、楽譜の表示欄の高さの真ん中に来るようにスクロールする。
+  // 同じ段の中で動くあいだは位置が変わらないので、画面は揺れない。
+  function centerLine(el, smooth) {
+    const svg = el.closest('svg');
+    if (!svg) return;
+    if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); // 横方向
+    const s = scroller.getBoundingClientRect();
+    const r = svg.getBoundingClientRect();
+    const top = scroller.scrollTop + (r.top + r.height / 2) - (s.top + scroller.clientHeight / 2);
+    if (Math.abs(top - scroller.scrollTop) < 2) return;
+    scroller.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
+  }
+
+  // 最初と最後の段も真ん中まで来られるように、楽譜の上下に表示欄の半分の余白を付ける
+  function updateCenterPad() {
+    scroller.style.setProperty('--center-pad', Math.round(scroller.clientHeight / 2) + 'px');
   }
 
   function pitchLabel(e) {
@@ -273,7 +306,9 @@
     $('status').innerHTML =
       `<span>パート: <b>${part.name}</b></span>` +
       `<span>位置: ${where} <b>${Number(beat.toFixed(2))}</b>拍</span>` +
-      `<span>カーソル: <b>${e ? pitchLabel(e) + '（' + durLabel(e.dur) + (e.tie ? '・タイ' : '') + '）' : '末尾（ここに追加）'}</b></span>` +
+      (ghost
+        ? `<span>仮の音符: <b>${pitchLabel(ghost)}（${durLabel(ghost.dur)}）</b> Enter で確定／Esc で取り消し</span>`
+        : `<span>カーソル: <b>${e ? pitchLabel(e) + '（' + durLabel(e.dur) + (e.tie ? '・タイ' : '') + '）' : '末尾（ここに追加）'}</b></span>`) +
       `<span>次に入れる長さ: <b>${durLabel(curTicks())}</b></span>` +
       `<span>入力: <b>${insertMode ? '挿入' : '上書き'}</b>（Insertで切替）</span>`;
     document.querySelectorAll('#durs button[data-base]').forEach((b) => b.classList.toggle('on', Number(b.dataset.base) === curDur.base));
@@ -325,6 +360,7 @@
   const snapshot = () => JSON.stringify({ score, cur });
 
   function mutate(fn) {
+    ghost = null;
     undoStack.push(snapshot());
     if (undoStack.length > 300) undoStack.shift();
     redoStack = [];
@@ -337,6 +373,7 @@
   function restore(from, to) {
     if (!from.length) return;
     stopPlay();
+    ghost = null;
     to.push(snapshot());
     const s = JSON.parse(from.pop());
     score = s.score;
@@ -361,8 +398,92 @@
     clearSelection();
     cur = { part, idx };
     clampCursor();
+    if (ghost) { ghost = null; render(); return; }
     highlight();
     updateStatus();
+  }
+
+  // ---------- 仮の音符（末尾で → を押すと出る） ----------
+
+  // 高さは、そのパートの直前の音符と同じ（音符がなければ基準のド）。長さは「次に入れる長さ」。
+  function openGhost() {
+    const ev = events();
+    let last = null;
+    for (let i = ev.length - 1; i >= 0; i--) if (!ev[i].rest) { last = ev[i]; break; }
+    ghost = last
+      ? { step: last.step, alter: last.alter, oct: last.oct, dur: curTicks(), rest: false }
+      : { step: 'C', alter: 0, oct: score.parts[cur.part].baseOct, dur: curTicks(), rest: false };
+    cur.idx = ev.length;
+    clearSelection();
+    render();
+    playNotes([M.midi(ghost)], 0.5);
+  }
+
+  function updateGhost(patch, sound = true) {
+    Object.assign(ghost, patch);
+    render();
+    if (sound && !ghost.rest) playNotes([M.midi(ghost)], 0.5);
+  }
+
+  function cancelGhost() {
+    if (!ghost) return;
+    ghost = null;
+    render();
+  }
+
+  function commitGhost() {
+    const g = ghost;
+    const e = g.rest ? { rest: true, dur: g.dur } : { step: g.step, alter: g.alter, oct: g.oct, dur: g.dur, tie: false, lyric: '' };
+    mutate(() => {
+      events().push(e);
+      cur.idx = events().length;
+    });
+  }
+
+  // 仮の音符が出ているときのキー。扱ったら true。扱わないキーは仮の音符を消して、ふだんの動きに回す。
+  function ghostKey(e, code, ctrl, digit) {
+    const g = ghost;
+    const keyAtEnd = () => info.grid.at(info.grid.find(startTick(cur.part, events().length))).key;
+    const setPitch = (n) => { if (M.midi(n) >= MIDI_MIN && M.midi(n) <= MIDI_MAX) updateGhost({ ...n, rest: false }); };
+    if (code === 'Enter' || code === 'NumpadEnter') { commitGhost(); return true; }
+    if (code === 'Escape' || code === 'ArrowLeft' || code === 'Delete' || code === 'Backspace') { cancelGhost(); return true; }
+    if (code === 'ArrowRight') return true; // 出したまま
+    if (code === 'ArrowUp' || code === 'ArrowDown') {
+      if (g.rest) return true;
+      const d = code === 'ArrowUp' ? 1 : -1;
+      setPitch(ctrl ? shiftedPitch(g, 0, d) : shiftedPitch(g, d, 0));
+      return true;
+    }
+    if (ctrl) return false;
+    const durKey = DUR_LETTER_KEYS[code] || (digit && DUR_KEYS[digit[1]]);
+    if (durKey) {
+      curDur = { base: durKey, dot: false };
+      updateGhost({ dur: durKey }, false);
+      return true;
+    }
+    if (code === 'Period' || code === 'NumpadDecimal') {
+      const dotted = g.dur % 3 === 0;
+      const next = dotted ? (g.dur * 2) / 3 : g.dur * 1.5;
+      if (!dotted && (g.dur < 2 || next > 48)) return true;
+      curDur = { base: dotted ? next : g.dur, dot: !dotted };
+      updateGhost({ dur: next }, false);
+      return true;
+    }
+    if (code in ACC_KEYS) {
+      if (g.rest) return true;
+      const alter = ACC_KEYS[code];
+      setPitch({ step: g.step, oct: g.oct, alter: g.alter === alter ? M.keyAlter(keyAtEnd(), g.step) : alter });
+      return true;
+    }
+    if (code in NOTE_KEYS) {
+      const m = 12 * (score.parts[cur.part].baseOct + 1 + octaveShift()) + NOTE_KEYS[code];
+      if (m < MIDI_MIN || m > MIDI_MAX) return true;
+      const [step, alter] = (score.key.fifths < 0 ? FLAT : SHARP)[m % 12];
+      setPitch({ step, alter, oct: Math.floor(m / 12) - 1 });
+      return true;
+    }
+    if (code === 'KeyR' || (digit && digit[1] === '0')) { updateGhost({ rest: !g.rest }); return true; }
+    return false;
   }
 
   // 鍵盤と同じ並び。semitone は「そのパートの基準のド」からの半音数。
@@ -382,9 +503,23 @@
   function setAccidental(alter, justEntered) {
     const ev = events();
     let targets = [];
-    if (sel && sel[cur.part]) {
-      const [a, b] = sel[cur.part];
-      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) targets.push(i);
+    if (sel) {
+      // 範囲選択中は、選んだパートすべての音符に付ける
+      const notes = selEvents().filter(({ e }) => !e.rest);
+      const keyOf = ({ part, idx }) => info.grid.at(info.grid.find(startTick(part, idx))).key;
+      const revert = notes.length === 1 && notes[0].e.alter === alter;
+      const changes = notes
+        .map((n) => ({ n, next: { step: n.e.step, alter: revert ? M.keyAlter(keyOf(n), n.e.step) : alter, oct: n.e.oct } }))
+        .filter(({ next }) => M.midi(next) >= MIDI_MIN && M.midi(next) <= MIDI_MAX);
+      if (!changes.length) return;
+      const keepSel = sel;
+      mutate(() => { for (const { n, next } of changes) Object.assign(n.e, next); });
+      sel = keepSel;
+      highlight();
+      const firsts = new Map();
+      for (const { n, next } of changes) if (!firsts.has(n.part)) firsts.set(n.part, M.midi(next));
+      playNotes([...firsts.values()], 0.5);
+      return;
     } else if (justEntered && justEntered.part === cur.part && ev[cur.idx - 1] === justEntered.e) {
       targets = [cur.idx - 1];
     } else {
@@ -508,31 +643,110 @@
   }
 
   // 長さキーは「次に入れる長さ」を決めるだけ。Alt を押しながらなら、カーソルの音符の長さも変える。
+  // 範囲選択中は、Alt の有無にかかわらず、選んだ音符・休符すべてをその長さにする。
   function setBase(base, resize) {
     curDur = { base, dot: false };
-    if (resize && cur.idx < events().length) mutate(() => { resizeEvent(cur.idx, curTicks()); });
+    if (sel) resizeSelection(() => curTicks());
+    else if (resize && cur.idx < events().length) mutate(() => { resizeEvent(cur.idx, curTicks()); });
     else updateStatus();
   }
 
+  // 範囲選択中は、選んだものそれぞれの付点を切り替える（全部に付点があれば外し、そうでなければ付ける）
   function toggleDot(resize) {
+    if (sel) {
+      const dotted = (d) => d % 3 === 0;
+      const all = selEvents().every(({ e }) => dotted(e.dur));
+      curDur.dot = !all;
+      resizeSelection((d) => (all ? (d * 2) / 3 : dotted(d) || d * 1.5 > 48 || d < 2 ? d : d * 1.5));
+      return;
+    }
     curDur.dot = !curDur.dot;
     if (resize && cur.idx < events().length) mutate(() => { resizeEvent(cur.idx, curTicks()); });
     else updateStatus();
   }
 
+  // 選択中の音符・休符を [{ part, idx, e }] で返す（入力用の末尾の空きは含めない）
+  function selEvents() {
+    const out = [];
+    if (!sel) return out;
+    for (const [p, [a, b]] of Object.entries(sel)) {
+      const pi = Number(p);
+      const ev = score.parts[pi].events;
+      for (let i = Math.min(a, b); i <= Math.max(a, b) && i < ev.length; i++) out.push({ part: pi, idx: i, e: ev[i] });
+    }
+    return out;
+  }
+
+  // 選んだ音符・休符の長さを、パートごとにまとめて変える。durOf(今の長さ) が新しい長さ。
+  // 上書きモードでは、選んだ範囲が伸びたぶんは後ろを上書きし、縮んだぶんは休符で埋めて、後ろの小節は動かさない。
+  // 挿入モードでは、そのパートの後ろがずれる。歌詞・タイ・高さはそのまま。
+  function resizeSelection(durOf) {
+    const keepSel = sel;
+    mutate(() => {
+      for (const [p, [a0, b0]] of Object.entries(keepSel)) {
+        const pi = Number(p);
+        const ev = score.parts[pi].events;
+        const a = Math.min(a0, b0);
+        const b = Math.min(Math.max(a0, b0), ev.length - 1);
+        if (a > b) continue;
+        let oldLen = 0;
+        let newLen = 0;
+        for (let i = a; i <= b; i++) {
+          oldLen += ev[i].dur;
+          ev[i].dur = durOf(ev[i].dur);
+          newLen += ev[i].dur;
+        }
+        if (insertMode || b === ev.length - 1 || newLen === oldLen) continue;
+        if (newLen > oldLen) {
+          // 伸びたぶん、選んだ範囲のすぐ後ろを先頭から削る（削りきれない音符は残りを休符にする）
+          const rest = ev.splice(b + 1);
+          let cut = newLen - oldLen;
+          while (cut > 0 && rest.length) {
+            const e = rest[0];
+            if (e.dur <= cut) { cut -= e.dur; rest.shift(); } else { rest[0] = { rest: true, dur: e.dur - cut }; cut = 0; }
+          }
+          ev.push(...rest);
+        } else {
+          ev.splice(b + 1, 0, { rest: true, dur: oldLen - newLen });
+          if (!ev[b].rest) ev[b].tie = false;
+        }
+      }
+    });
+    sel = keepSel;
+    highlight();
+    say('選択中の長さを変えました');
+  }
+
+  function shiftedPitch(e, semitones, octave) {
+    if (octave) return { step: e.step, alter: e.alter, oct: e.oct + octave };
+    const m = M.midi(e) + semitones;
+    const f = score.key.fifths;
+    const table = f < 0 ? FLAT : f > 0 ? SHARP : semitones > 0 ? SHARP : FLAT;
+    const [step, alter] = table[((m % 12) + 12) % 12];
+    return { step, alter, oct: Math.floor(m / 12) - 1 };
+  }
+
+  // 範囲選択中は、選んだ音符すべての高さを変える（1つでも音域の外に出るなら何もしない）。
+  // 選んだ音符どうしのタイはそのまま残す（全部が同じだけ動くので、つながりは変わらない）。
   function shiftPitch(semitones, octave) {
+    if (sel) {
+      const notes = selEvents().filter(({ e }) => !e.rest);
+      if (!notes.length) return;
+      const nexts = notes.map(({ e }) => shiftedPitch(e, semitones, octave));
+      if (nexts.some((n) => M.midi(n) < MIDI_MIN || M.midi(n) > MIDI_MAX)) { say('音域の外に出るので変えられません'); return; }
+      const keepSel = sel;
+      mutate(() => { notes.forEach(({ e }, i) => Object.assign(e, nexts[i])); });
+      sel = keepSel;
+      highlight();
+      // パートごとに選んだ最初の音を鳴らす（和音として聴ける）
+      const firsts = new Map();
+      notes.forEach(({ part }, i) => { if (!firsts.has(part)) firsts.set(part, M.midi(nexts[i])); });
+      playNotes([...firsts.values()], 0.5);
+      return;
+    }
     const e = events()[cur.idx];
     if (!e || e.rest) return;
-    let next;
-    if (octave) {
-      next = { step: e.step, alter: e.alter, oct: e.oct + octave };
-    } else {
-      const m = M.midi(e) + semitones;
-      const f = score.key.fifths;
-      const table = f < 0 ? FLAT : f > 0 ? SHARP : semitones > 0 ? SHARP : FLAT;
-      const [step, alter] = table[((m % 12) + 12) % 12];
-      next = { step, alter, oct: Math.floor(m / 12) - 1 };
-    }
+    const next = shiftedPitch(e, semitones, octave);
     const mm = M.midi(next);
     if (mm < MIDI_MIN || mm > MIDI_MAX) return;
     mutate(() => { Object.assign(events()[cur.idx], next, { tie: false }); });
@@ -564,7 +778,7 @@
     sel = parts.length ? ranges : null;
     if (sel) {
       const n = parts.reduce((s, p) => s + ranges[p][1] - ranges[p][0] + 1, 0);
-      say(n + '個を選択中（Ctrl+C コピー／Ctrl+X 切り取り／Delete 削除／Esc 解除）');
+      say(n + '個を選択中（長さキー・↑↓で変更／Ctrl+C コピー／Ctrl+X 切り取り／Delete 削除／Esc 解除）');
     } else {
       say('');
     }
@@ -660,6 +874,36 @@
       eraseRange(cur.part, idx, idx);
       cur.idx = idx;
     });
+  }
+
+  // 小節ごと削除（4声まとめて）。範囲選択中なら、選んだ音符がかかる小節をすべて消す。
+  function deleteMeasuresAtCursor() {
+    let from;
+    let to;
+    if (sel) {
+      from = Infinity;
+      to = -1;
+      for (const [p, [i0, i1]] of Object.entries(sel)) {
+        const pi = Number(p);
+        const ev = score.parts[pi].events;
+        const t0 = startTick(pi, i0);
+        const t1 = startTick(pi, i1) + (ev[i1] ? ev[i1].dur : 1) - 1;
+        from = Math.min(from, info.grid.find(t0));
+        to = Math.max(to, info.grid.find(t1));
+      }
+    } else {
+      from = to = info.grid.find(startTick(cur.part, cur.idx));
+    }
+    // 何も書いていない末尾の入力用の小節は消せない（消すものがない）
+    const written = Math.max(...score.parts.map((p) => M.partTicks(p)));
+    if (info.grid.at(from).start >= written) { say('この小節にはまだ何も書かれていません'); return; }
+    const label = (m) => (info.grid.at(m).pickup ? '弱起' : info.grid.at(m).number + '小節目');
+    const what = from === to ? label(from) : `${label(from)}〜${label(to)}`;
+    mutate(() => {
+      M.deleteMeasures(score, from, to);
+      cur.idx = idxAtTick(cur.part, M.grid(score).at(from).start);
+    });
+    say(what + 'を削除しました（Ctrl+Z で戻せます）');
   }
 
   function switchPart(delta) {
@@ -898,7 +1142,9 @@
       eventCallback: (ev) => {
         if (!ev) { stopPlay(); return; }
         clearPlaying();
-        for (const set of ev.elements || []) for (const el of set) el.classList.add('playing');
+        let firstEl = null;
+        for (const set of ev.elements || []) for (const el of set) { el.classList.add('playing'); firstEl = firstEl || el; }
+        if (firstEl) centerLine(firstEl, true);
       },
     });
     if (frac > 0) mine.seek(frac);
@@ -1018,12 +1264,18 @@
     let handled = true;
     const digit = /^(?:Digit|Numpad)([0-9])$/.exec(code);
 
+    if (ghost) {
+      if (ghostKey(e, code, ctrl, digit)) { e.preventDefault(); return; }
+      cancelGhost();
+    }
+
     if (ctrl && code === 'KeyZ') restore(e.shiftKey ? redoStack : undoStack, e.shiftKey ? undoStack : redoStack);
     else if (ctrl && code === 'KeyY') restore(redoStack, undoStack);
     else if (ctrl && code === 'KeyS') saveJson();
     else if (ctrl && code === 'KeyC') copySelection();
     else if (ctrl && code === 'KeyX') { if (copySelection()) deleteSelection(); }
     else if (ctrl && code === 'KeyV') paste();
+    else if (ctrl && (code === 'Delete' || code === 'Backspace')) deleteMeasuresAtCursor();
     else if (ctrl && code === 'ArrowLeft') moveMeasure(-1);
     else if (ctrl && code === 'ArrowRight') moveMeasure(1);
     else if (ctrl && code === 'ArrowUp') shiftPitch(0, 1);
@@ -1049,7 +1301,11 @@
     else if (code === 'KeyH') playNotes(chordAt(startTick(cur.part, cur.idx)), 1.2);
     else if (code === 'Enter' || code === 'NumpadEnter') openLyric(cur.idx);
     else if (code === 'ArrowLeft') moveTo(cur.part, cur.idx - 1);
-    else if (code === 'ArrowRight') moveTo(cur.part, cur.idx + 1);
+    else if (code === 'ArrowRight') {
+      // 次の音符がなければ、仮の音符を出す
+      if (!sel && cur.idx >= events().length - 1) openGhost();
+      else moveTo(cur.part, cur.idx + 1);
+    }
     else if (code === 'ArrowUp') shiftPitch(1, 0);
     else if (code === 'ArrowDown') shiftPitch(-1, 0);
     else if (code === 'Home') moveTo(cur.part, 0);
@@ -1141,7 +1397,7 @@
         e.target.blur();
       });
     }
-    window.addEventListener('resize', () => decorate());
+    window.addEventListener('resize', () => { updateCenterPad(); decorate(); });
   }
 
   setupControls();
