@@ -316,7 +316,9 @@
 
   // 戻り値の toks は「ABC文字列の何文字目〜何文字目が、どのパートの何番目の音符か」の対応表。
   // 画面側がクリックや色付けに使う。
-  function toAbc(score, { forEdit = false } = {}) {
+  // lineStarts を渡すと、その小節番号（0始まり、弱起の小節も1つと数える）で段を切る。
+  // 原本と同じ段組で表示して見比べるとき用（tools/compare/compare.html）。
+  function toAbc(score, { forEdit = false, lineStarts = null } = {}) {
     const L = layout(score, { forEdit });
     const toks = [];
     let out = 'X:1\n';
@@ -331,7 +333,13 @@
     // パートごとに「直前の音符がタイで終わったか」を、小節や段をまたいで覚えておく
     const tieIn = score.parts.map(() => false);
     // 弱起の小節は1段目のおまけにする（1段目だけ1小節多い）
-    const lineEnd = (s) => Math.min(L.total, s + MEASURES_PER_LINE + (s === 0 && L.grid.at(0).pickup ? 1 : 0));
+    const lineEnd = (s) => {
+      if (lineStarts && lineStarts.length) {
+        const n = lineStarts.find((b) => b > s);
+        return Math.min(L.total, n === undefined ? L.total : n);
+      }
+      return Math.min(L.total, s + MEASURES_PER_LINE + (s === 0 && L.grid.at(0).pickup ? 1 : 0));
+    };
     for (let s = 0; s < L.total; s = lineEnd(s)) {
       L.parts.forEach((measures, pi) => {
         const part = score.parts[pi];

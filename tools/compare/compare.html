@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>原本と同じ段組で表示</title>
+<style>body{margin:0;background:#fff;color:#000;font-family:sans-serif} #paper svg{display:block;margin-bottom:24px;border-bottom:1px solid #ccc}</style>
+</head><body>
+<div id="paper"></div>
+<script src="../../vendor/abcjs-basic-min.js"></script>
+<script>
+// 使い方: compare.html?score=my-true-love-hath-my-heart&starts=0,6,12
+const q = new URLSearchParams(location.search);
+const lineStarts = (q.get('starts') || '').split(',').filter(Boolean).map(Number);
+</script>
+<script src="../../model.js"></script>
+<script>
+(async () => {
+  const name = q.get('score');
+  const obj = await (await fetch('../../scores/' + name + '.json')).json();
+  const s = ScoreModel.fromJson(obj);
+  const { abc } = ScoreModel.toAbc(s, { lineStarts });
+  window.__abc = abc;
+  ABCJS.renderAbc('paper', abc, { staffwidth: Number(q.get('w') || 740), scale: 1, oneSvgPerLine: true, add_classes: true });
+  document.title = 'ready';
+})();
+</script>
+</body></html>
