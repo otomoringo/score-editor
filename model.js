@@ -353,7 +353,10 @@
             if (it.pos > 0 && (it.pos + gm.off) % beat === 0) out += ' ';
             const start = out.length;
             if (it.rest) {
-              out += 'z' + it.dur;
+              // 全音符ぶん（4分の4拍子など）の小節まるごとの休符は Z（小節休符）で書く。z32 と長さで書くと、
+              // 曲頭の拍子が違う曲（3拍子で始まり途中から4拍子など）で abcjs が配置を誤り、段のあいだで小節線がずれる。
+              // それ以外の長さの小節で Z を使うと逆にずれるので、長さで書く（5曲で確認済み）
+              out += it.pos === 0 && it.dur === gm.len && gm.len === 32 && !gm.pickup ? 'Z' : 'z' + it.dur;
             } else {
               const e = it.e;
               const k = e.step + e.oct;

@@ -17,11 +17,14 @@
   const FILE_NOTE = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
   const MIDI_MIN = 24; // C1
   const MIDI_MAX = 96; // C7（手元に置いた音源ファイルの範囲）
-  // 白鍵 A S D F J K L ; = ドレミファソラシド、黒鍵 W E U I O = ド♯ レ♯ ファ♯ ソ♯ ラ♯
+  // 白鍵 A S D F J K L = ドレミファソラシ、黒鍵 W E U I O = ド♯ レ♯ ファ♯ ソ♯ ラ♯
+  // （高いドは 右Shift+A。; は臨時記号の♯に使う）
   const NOTE_KEYS = {
-    KeyA: 0, KeyS: 2, KeyD: 4, KeyF: 5, KeyJ: 7, KeyK: 9, KeyL: 11, Semicolon: 12,
+    KeyA: 0, KeyS: 2, KeyD: 4, KeyF: 5, KeyJ: 7, KeyK: 9, KeyL: 11,
     KeyW: 1, KeyE: 3, KeyU: 6, KeyI: 8, KeyO: 10,
   };
+  // 臨時記号のキー: ; = ♯、- = ♭、N = ♮
+  const ACC_KEYS = { Semicolon: 1, Minus: -1, NumpadSubtract: -1, KeyN: 0 };
 
   let score = M.newScore();
   let cur = { part: 0, idx: 0 };
@@ -40,6 +43,7 @@
   let hoverCols = null;
   let hoverBar = null;
   let insertMode = false;
+  let lastEntered = null; // 直前に鍵盤で入れた音符（臨時記号のキーはこの音符に付ける）
   let sel = null; // 範囲選択。{ パート番号: [最初の音符, 最後の音符] }
   let selAnchor = null;
   let clip = null; // コピーした内容。[{ offset: 一番上の段からの段数, events }]
@@ -369,7 +373,42 @@
     const oct = Math.floor(m / 12) - 1;
     const placed = { step, alter, oct, dur: curTicks(), tie: false, lyric: '' };
     mutate(() => { placeEvent(placed); });
+    lastEntered = { part: cur.part, e: placed };
     playNotes([M.midi(placed)], 0.5);
+  }
+
+  // 臨時記号を付ける（alter: 1=♯, -1=♭, 0=♮）。同じ記号をもう一度押すと、調号どおりの音に戻す。
+  // 付ける相手は、範囲選択があればその中の音符すべて、音符を入れた直後ならその音符、それ以外はカーソルの音符。
+  function setAccidental(alter, justEntered) {
+    const ev = events();
+    let targets = [];
+    if (sel && sel[cur.part]) {
+      const [a, b] = sel[cur.part];
+      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) targets.push(i);
+    } else if (justEntered && justEntered.part === cur.part && ev[cur.idx - 1] === justEntered.e) {
+      targets = [cur.idx - 1];
+    } else {
+      targets = [cur.idx < ev.length ? cur.idx : ev.length - 1];
+    }
+    targets = targets.filter((i) => ev[i] && !ev[i].rest);
+    if (!targets.length) return;
+    const one = targets.length === 1 ? ev[targets[0]] : null;
+    const keyAt = (i) => info.grid.at(info.grid.find(startTick(cur.part, i))).key;
+    // 1つだけなら、すでに同じ記号のときは調号どおりに戻す（切り替え）
+    const revert = one && one.alter === alter;
+    const changes = targets.map((i) => {
+      const e = ev[i];
+      const a = revert ? M.keyAlter(keyAt(i), e.step) : alter;
+      return { i, next: { step: e.step, alter: a, oct: e.oct } };
+    }).filter(({ next }) => M.midi(next) >= MIDI_MIN && M.midi(next) <= MIDI_MAX);
+    if (!changes.length) return;
+    const keepSel = sel;
+    mutate(() => {
+      for (const { i, next } of changes) Object.assign(events()[i], next);
+    });
+    if (keepSel) { sel = keepSel; highlight(); }
+    if (justEntered && one) lastEntered = justEntered; // 続けて押しても同じ音符に効くように
+    playNotes(changes.map(({ next }) => M.midi(next)), 0.5);
   }
 
   function enterRest() {
@@ -972,6 +1011,8 @@
     if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') return;
     const tag = e.target.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    const justEntered = lastEntered;
+    lastEntered = null;
     const ctrl = e.ctrlKey || e.metaKey;
     const code = e.code;
     let handled = true;
@@ -995,6 +1036,7 @@
     else if (e.altKey && (code === 'Period' || code === 'NumpadDecimal')) toggleDot(true);
     else if (e.altKey) handled = false;
     else if (code in NOTE_KEYS) enterNote(NOTE_KEYS[code]);
+    else if (code in ACC_KEYS) setAccidental(ACC_KEYS[code], justEntered);
     else if (code === 'Insert') { insertMode = !insertMode; updateStatus(); }
     else if (code === 'KeyR' || (digit && digit[1] === '0')) enterRest();
     else if (digit && DUR_KEYS[digit[1]]) setBase(DUR_KEYS[digit[1]]);

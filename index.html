@@ -55,6 +55,8 @@
   .sel, .sel * { fill: #f59f00 !important; }
   .cur, .cur * { fill: var(--accent) !important; }
   #paper { user-select: none; }
+  /* 4分の4拍子の小節休符（Z）に abcjs が付ける「1」を出さない（1小節だけの休みなので数字は不要） */
+  #paper text.abcjs-rest { display: none; }
   #band { position: fixed; z-index: 10; border: 1px dashed #f59f00; background: rgba(245, 159, 0, 0.15); pointer-events: none; }
   .cur-end, .cur-end * { fill: var(--end) !important; }
   .playing, .playing * { fill: var(--play) !important; }
@@ -131,7 +133,7 @@
   <div id="help">
     <h3>音符を入れる</h3>
     <table>
-      <tr><td><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><kbd>F</kbd> <kbd>J</kbd><kbd>K</kbd><kbd>L</kbd><kbd>;</kbd></td><td>ド レ ミ ファ ソ ラ シ ド（白鍵）</td></tr>
+      <tr><td><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><kbd>F</kbd> <kbd>J</kbd><kbd>K</kbd><kbd>L</kbd></td><td>ド レ ミ ファ ソ ラ シ（白鍵）。高いドは 右<kbd>Shift</kbd>+<kbd>A</kbd></td></tr>
       <tr><td><kbd>W</kbd><kbd>E</kbd> <kbd>U</kbd><kbd>I</kbd><kbd>O</kbd></td><td>ド♯ レ♯ ファ♯ ソ♯ ラ♯（黒鍵）</td></tr>
       <tr><td>左<kbd>Shift</kbd>+鍵</td><td>1オクターブ下</td></tr>
       <tr><td>右<kbd>Shift</kbd>+鍵</td><td>1オクターブ上</td></tr>
@@ -144,6 +146,7 @@
     </table>
     <h3>直す</h3>
     <table>
+      <tr><td><kbd>;</kbd> <kbd>-</kbd> <kbd>N</kbd></td><td>♯ ♭ ♮ を付ける（入れた直後の音符、またはカーソルの音符。範囲選択中は全部）。同じキーをもう一度で調号どおりに戻す</td></tr>
       <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>半音上げる・下げる</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></td><td>1オクターブ上げる・下げる</td></tr>
       <tr><td><kbd>Delete</kbd></td><td>カーソルの音符を休符に戻す</td></tr>
