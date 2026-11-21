@@ -40,6 +40,7 @@
   #help td:first-child { white-space: nowrap; padding-right: 8px; }
   kbd { font-family: Consolas, monospace; font-size: 12px; background: var(--kbd); border: 1px solid var(--field-line); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; }
   #paper { position: relative; }
+  #vbar { position: absolute; display: none; width: 2px; margin-left: -1px; background: var(--play); opacity: 0.75; pointer-events: none; }
   #paper.harm-on svg { margin-bottom: 40px; }
   .hl { position: absolute; pointer-events: none; display: flex; flex-direction: column; font-size: 12px; line-height: 1.3; white-space: nowrap; color: var(--ink); }
   .hl b { font-weight: 600; }
@@ -67,7 +68,7 @@
     #paper { border: none; max-width: none; padding: 0; background: #fff; color: #000; }
     #paper svg { break-inside: avoid; }
     .cur, .cur *, .cur-end, .cur-end *, .playing, .playing *, .sel, .sel *, .deg1, .deg1 *, .deg4, .deg4 *, .deg5, .deg5 * { fill: #000 !important; }
-    .hl { display: none !important; }
+    .hl, #vbar { display: none !important; }
     #paper.harm-on svg { margin-bottom: 0; }
   }
 </style>
@@ -109,7 +110,7 @@
     <label><input type="checkbox" class="mute" data-i="3" checked><span class="mlabel">B</span></label>
   </span>
   <span class="group">
-    <label title="音符にマウスを乗せると、その拍の4声が鳴ります"><input type="checkbox" id="hover" checked>マウスを乗せて和音を聴く</label>
+    <label title="段組の上にマウスを置くと、その横位置の拍の4声が鳴り、縦棒で位置を示します（音符の上でなくても、歌詞や五線の間でも鳴ります）"><input type="checkbox" id="hover" checked>マウスを乗せて和音を聴く</label>
     <label title="拍ごとに鳴っている音からコード名と度数を判定して、五線の下に表示します"><input type="checkbox" id="harm" checked>和音を表示</label>
     <label title="その調の主音・下属音・属音に当たる音符に色を付けます"><input type="checkbox" id="degree" checked>主音・属音に色</label>
   </span>
@@ -178,7 +179,7 @@
       <tr><td><kbd>Space</kbd></td><td>カーソル位置から再生・停止</td></tr>
       <tr><td><kbd>Shift</kbd>+<kbd>Space</kbd></td><td>先頭から再生</td></tr>
       <tr><td><kbd>H</kbd></td><td>カーソル位置の4声の和音を鳴らす</td></tr>
-      <tr><td>マウスを乗せる</td><td>その拍の4声が鳴る</td></tr>
+      <tr><td>マウスを乗せる</td><td>マウスの横位置にある拍の4声が鳴り、縦棒が出る。音符の上でなくても、歌詞や五線の間でよい</td></tr>
     </table>
     <h3>色の意味</h3>
     <table>

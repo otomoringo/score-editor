@@ -37,6 +37,8 @@
   let printing = false;
   let lyricOpen = false;
   let hoverTick = -1;
+  let hoverCols = null;
+  let hoverBar = null;
   let insertMode = false;
   let sel = null; // 範囲選択。{ パート番号: [最初の音符, 最後の音符] }
   let selAnchor = null;
@@ -181,6 +183,7 @@
 
   // 和音の表示（五線の下にコード名と度数）と、主音・下属音・属音の色分け
   function decorate() {
+    hoverCols = null; // 段組の位置が変わるので、マウス位置と拍の対応を作り直させる
     paper.querySelectorAll('.hl').forEach((el) => el.remove());
     paper.querySelectorAll('.deg1, .deg4, .deg5').forEach((el) => el.classList.remove('deg1', 'deg4', 'deg5'));
     const showHarmony = $('harm').checked && !printing;
@@ -750,16 +753,70 @@
     setTimeout(() => { justDragged = false; }, 0);
   });
 
-  paper.addEventListener('mouseover', (e) => {
-    if (!$('hover').checked || playing || lyricOpen || band) return;
-    const g = e.target.closest && e.target.closest('[data-tok]');
-    if (!g) return;
-    const tok = toks[Number(g.getAttribute('data-tok'))];
-    if (!tok || tok.tick === hoverTick) return;
-    hoverTick = tok.tick;
-    playNotes(chordAt(tok.tick), 0.8);
+  // マウスを乗せて和音を聴く: 段組のどこ（音符の上、歌詞、五線の間）にいても、
+  // マウスの横位置にある拍の和音を鳴らし、その位置に縦棒を出す。
+
+  // 段組ごとに「どの横位置がどの拍か」を調べる（紙の左上からの位置）。描き直しのたびに作り直す。
+  function hoverColumns() {
+    if (hoverCols) return hoverCols;
+    const pr = paper.getBoundingClientRect();
+    const bySvg = new Map();
+    for (const t of toks) {
+      const el = t.els[0];
+      const svg = el && el.ownerSVGElement;
+      if (!svg) continue;
+      if (!bySvg.has(svg)) bySvg.set(svg, new Map());
+      const cols = bySvg.get(svg);
+      const head = el.querySelector('.abcjs-notehead');
+      const r = (head || el).getBoundingClientRect();
+      const x = r.left + r.width / 2 - pr.left;
+      const known = cols.get(t.tick);
+      // 全休符は小節の真ん中に描かれるので、同じ拍に音符があれば音符の位置を使う
+      if (!known || (head && !known.head)) cols.set(t.tick, { x, tick: t.tick, head: !!head });
+    }
+    hoverCols = [...bySvg].map(([svg, cols]) => {
+      const sr = svg.getBoundingClientRect();
+      const staffs = [...svg.querySelectorAll('.abcjs-staff')].map((s) => s.getBoundingClientRect());
+      return {
+        top: sr.top - pr.top,
+        bottom: sr.bottom - pr.top + (paper.classList.contains('harm-on') ? 40 : 0),
+        barTop: (staffs.length ? Math.min(...staffs.map((s) => s.top)) : sr.top) - pr.top,
+        barBottom: (staffs.length ? Math.max(...staffs.map((s) => s.bottom)) : sr.bottom) - pr.top,
+        list: [...cols.values()].sort((a, b) => a.x - b.x),
+      };
+    });
+    return hoverCols;
+  }
+
+  function hideHoverBar() {
+    hoverTick = -1;
+    if (hoverBar) hoverBar.style.display = 'none';
+  }
+
+  paper.addEventListener('mousemove', (e) => {
+    if (!$('hover').checked || playing || lyricOpen || band || printing) { hideHoverBar(); return; }
+    const pr = paper.getBoundingClientRect();
+    const x = e.clientX - pr.left;
+    const y = e.clientY - pr.top;
+    const sys = hoverColumns().find((s) => y >= s.top && y < s.bottom);
+    let col = null;
+    // マウスのすぐ左にある拍（音符の少し手前でもその音符を拾う）
+    if (sys) for (const c of sys.list) { if (c.x - 7 <= x) col = c; else break; }
+    if (!col) { hideHoverBar(); return; }
+    if (!hoverBar || !hoverBar.isConnected) {
+      hoverBar = document.createElement('div');
+      hoverBar.id = 'vbar';
+      paper.appendChild(hoverBar);
+    }
+    hoverBar.style.display = 'block';
+    hoverBar.style.left = col.x + 'px';
+    hoverBar.style.top = sys.barTop + 'px';
+    hoverBar.style.height = (sys.barBottom - sys.barTop) + 'px';
+    if (col.tick === hoverTick) return;
+    hoverTick = col.tick;
+    playNotes(chordAt(col.tick), 0.8);
   });
-  paper.addEventListener('mouseleave', () => { hoverTick = -1; });
+  paper.addEventListener('mouseleave', hideHoverBar);
 
   // ---------- 再生（abcjs） ----------
 
