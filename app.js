@@ -44,7 +44,7 @@
   let hoverBar = null;
   let insertMode = false;
   let lastEntered = null; // 直前に鍵盤で入れた音符（臨時記号のキーはこの音符に付ける）
-  // 仮の音符。パートの末尾で → を押すと出る薄い音符で、高さ・長さ・臨時記号を変えてから Enter で確定する。
+  // 仮の音符。パートの末尾や空いている休符へ → で進むと出る薄い音符で、高さ・長さ・臨時記号を変えてから → か Enter で確定する。
   // { step, alter, oct, dur, rest } または null
   let ghost = null;
   let sel = null; // 範囲選択。{ パート番号: [最初の音符, 最後の音符] }
@@ -151,8 +151,19 @@
   // 仮の音符を末尾に足した、表示用の楽譜（score そのものは変えない）
   function viewScore() {
     if (!ghost || printing) return score;
-    const g = ghost.rest ? { rest: true, dur: ghost.dur } : { step: ghost.step, alter: ghost.alter, oct: ghost.oct, dur: ghost.dur, tie: false, lyric: '' };
-    return { ...score, parts: score.parts.map((p, i) => (i === cur.part ? { ...p, events: [...p.events, g] } : p)) };
+    const view = { ...score, parts: score.parts.map((p, i) => (i === cur.part ? { ...p, events: p.events.map((e) => ({ ...e })) } : p)) };
+    // 確定したときと同じ置き方（空いている休符なら上書き）を、写しの上でやってみせる
+    const keepScore = score;
+    const keepCur = { ...cur };
+    try {
+      score = view;
+      cur.idx = ghost.at;
+      placeEvent(ghostEvent());
+    } finally {
+      score = keepScore;
+      cur = keepCur;
+    }
+    return view;
   }
 
   function render() {
@@ -252,7 +263,7 @@
 
   function cursorToks() {
     const len = events().length;
-    if (ghost && !printing) return { list: toks.filter((x) => x.part === cur.part && !x.pad && x.idx === len), cls: 'ghost' };
+    if (ghost && !printing) return { list: toks.filter((x) => x.part === cur.part && !x.pad && x.idx === ghost.at), cls: 'ghost' };
     if (cur.idx >= len) {
       const t = toks.find((x) => x.part === cur.part && x.pad);
       return { list: t ? [t] : [], cls: 'cur-end' };
@@ -317,7 +328,7 @@
       `<span>パート: <b>${part.name}</b></span>` +
       `<span>位置: ${where} <b>${Number(beat.toFixed(2))}</b>拍</span>` +
       (ghost
-        ? `<span>仮の音符: <b>${pitchLabel(ghost)}（${durLabel(ghost.dur)}）</b> Enter で確定／Esc で取り消し</span>`
+        ? `<span>仮の音符: <b>${pitchLabel(ghost)}（${durLabel(ghost.dur)}）</b> → で確定して次へ／Enter で確定／Esc で取り消し</span>`
         : `<span>カーソル: <b>${e ? pitchLabel(e) + '（' + durLabel(e.dur) + (e.tie ? '・タイ' : '') + '）' : '末尾（ここに追加）'}</b></span>`) +
       `<span>次に入れる長さ: <b>${durLabel(curTicks())}</b></span>` +
       `<span>入力: <b>${insertMode ? '挿入' : '上書き'}</b>（Insertで切替）</span>`;
@@ -413,20 +424,51 @@
     updateStatus();
   }
 
-  // ---------- 仮の音符（末尾で → を押すと出る） ----------
+  // ---------- 仮の音符（→ で、まだ何も書いていない場所に進むと出る） ----------
 
-  // 高さは、そのパートの直前の音符と同じ（音符がなければ基準のド）。長さは「次に入れる長さ」。
-  function openGhost() {
+  // idx の休符が「空いている場所」か。その休符から小節の終わりまで休符しかなければ、空いているとみなす
+  // （はじめから入っている全休符や、音符を入れたあとに小節の残りとしてできた休符）。
+  function isEmptyRest(partIdx, idx) {
+    const ev = score.parts[partIdx].events;
+    if (!ev[idx] || !ev[idx].rest) return false;
+    const s = startTick(partIdx, idx);
+    const g = M.grid(score);
+    const gm = g.at(g.find(s));
+    const me = gm.start + gm.len;
+    let t = s;
+    for (let j = idx; j < ev.length && t < me; j++) {
+      if (!ev[j].rest) return false;
+      t += ev[j].dur;
+    }
+    return true;
+  }
+
+  // → で idx に進む。空いている場所（末尾や、空いている休符）なら仮の音符を出し、音符が書いてあればそこにカーソルを当てる。
+  function stepTo(idx) {
+    const len = events().length;
+    if (idx >= len) openGhost(len);
+    else if (!insertMode && isEmptyRest(cur.part, idx)) openGhost(idx);
+    else moveTo(cur.part, idx);
+  }
+
+  // at は仮の音符を置く位置（末尾なら events().length、空いている休符ならその休符の番号）。
+  // 高さは、それより前の最後の音符と同じ（音符がなければ基準のド）。長さは「次に入れる長さ」。
+  function openGhost(at) {
     const ev = events();
     let last = null;
-    for (let i = ev.length - 1; i >= 0; i--) if (!ev[i].rest) { last = ev[i]; break; }
+    for (let i = Math.min(at, ev.length) - 1; i >= 0; i--) if (!ev[i].rest) { last = ev[i]; break; }
     ghost = last
-      ? { step: last.step, alter: last.alter, oct: last.oct, dur: curTicks(), rest: false }
-      : { step: 'C', alter: 0, oct: score.parts[cur.part].baseOct, dur: curTicks(), rest: false };
-    cur.idx = ev.length;
+      ? { step: last.step, alter: last.alter, oct: last.oct, dur: curTicks(), rest: false, at }
+      : { step: 'C', alter: 0, oct: score.parts[cur.part].baseOct, dur: curTicks(), rest: false, at };
+    cur.idx = at;
     clearSelection();
     render();
     playNotes([M.midi(ghost)], 0.5);
+  }
+
+  function ghostEvent() {
+    const g = ghost;
+    return g.rest ? { rest: true, dur: g.dur } : { step: g.step, alter: g.alter, oct: g.oct, dur: g.dur, tie: false, lyric: '' };
   }
 
   function updateGhost(patch, sound = true) {
@@ -441,24 +483,27 @@
     render();
   }
 
+  // 仮の音符を置く。空いている休符の上なら、その長さぶんを上書きする。確定した音符にカーソルを当てる。
   function commitGhost() {
-    const g = ghost;
-    const e = g.rest ? { rest: true, dur: g.dur } : { step: g.step, alter: g.alter, oct: g.oct, dur: g.dur, tie: false, lyric: '' };
-    // 確定した音符にカーソルを当てる（続けて → を押せば、次の仮の音符が出る）
+    const e = ghostEvent();
+    const at = ghost.at;
     mutate(() => {
-      events().push(e);
-      cur.idx = events().length - 1;
+      cur.idx = at;
+      placeEvent(e);
+      cur.idx--;
     });
   }
 
   // 仮の音符が出ているときのキー。扱ったら true。扱わないキーは仮の音符を消して、ふだんの動きに回す。
   function ghostKey(e, code, ctrl, digit) {
     const g = ghost;
-    const keyAtEnd = () => info.grid.at(info.grid.find(startTick(cur.part, events().length))).key;
+    const keyAtEnd = () => info.grid.at(info.grid.find(startTick(cur.part, g.at))).key;
     const setPitch = (n) => { if (M.midi(n) >= MIDI_MIN && M.midi(n) <= MIDI_MAX) updateGhost({ ...n, rest: false }); };
     if (code === 'Enter' || code === 'NumpadEnter') { commitGhost(); return true; }
-    if (code === 'Escape' || code === 'ArrowLeft' || code === 'Delete' || code === 'Backspace') { cancelGhost(); return true; }
-    if (code === 'ArrowRight') return true; // 出したまま
+    if (code === 'Escape' || code === 'Delete' || code === 'Backspace') { cancelGhost(); return true; }
+    if (code === 'ArrowLeft') { moveTo(cur.part, g.at - 1); return true; } // 取り消して、手前の音符へ
+    // → は確定して次へ進む。次が空いていれば、すぐ次の仮の音符が出る（同じ高さ・同じ長さから打ち込める）
+    if (code === 'ArrowRight') { commitGhost(); stepTo(cur.idx + 1); return true; }
     if (code === 'ArrowUp' || code === 'ArrowDown') {
       if (g.rest) return true;
       const d = code === 'ArrowUp' ? 1 : -1;
@@ -1444,8 +1489,8 @@
     else if (code === 'Enter' || code === 'NumpadEnter') openLyric(cur.idx);
     else if (code === 'ArrowLeft') moveTo(cur.part, cur.idx - 1);
     else if (code === 'ArrowRight') {
-      // 次の音符がなければ、仮の音符を出す
-      if (!sel && cur.idx >= events().length - 1) openGhost();
+      // 次が末尾や空いている休符なら、仮の音符を出す。音符が書いてあれば、そこへ進む
+      if (!sel) stepTo(Math.min(cur.idx, events().length) + 1);
       else moveTo(cur.part, cur.idx + 1);
     }
     else if (code === 'ArrowUp') shiftPitch(1, 0);
