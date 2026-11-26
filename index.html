@@ -18,6 +18,7 @@
   .bar label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
   .group + .group { border-left: 1px solid var(--line); padding-left: 14px; }
+  .mnum { width: 4.5em; }
   input[type=text], input[type=number], select { font: inherit; padding: 3px 6px; border: 1px solid var(--field-line); border-radius: 4px; background: var(--field); color: var(--ink); }
   #title { width: 16em; }
   #composer { width: 9em; }
@@ -63,7 +64,7 @@
   [data-tok] { cursor: pointer; }
   #lyric { position: absolute; display: none; font: inherit; font-size: 15px; width: 7em; padding: 2px 4px; border: 2px solid var(--accent); border-radius: 4px; z-index: 5; background: var(--field); color: var(--ink); }
   #msg { color: #e8590c; }
-  #wavHost { position: absolute; left: -99999px; top: 0; width: 1000px; }
+  #wavHost, #playHost { position: absolute; left: -99999px; top: 0; width: 1000px; }
   @media print {
     .bar, #status, #help, #lyric { display: none !important; }
     body, #main, #scroll { display: block; height: auto; overflow: visible; background: #fff; padding: 0; }
@@ -105,7 +106,11 @@
     <button id="btnPlayTop" title="Shift+Space">⏮ 先頭から</button>
     <button id="btnStop">■ 停止</button>
   </span>
-  <span class="group">鳴らすパート
+  <span class="group" title="小節番号で範囲を指定して再生します。WAV・MIDI の書き出しも、この範囲だけになります（両方空なら曲全体）">範囲
+    <input type="number" id="rangeFrom" class="mnum" min="0" placeholder="最初">〜<input type="number" id="rangeTo" class="mnum" min="0" placeholder="最後">小節
+    <button id="btnPlayRange">▶ 範囲を再生</button>
+  </span>
+  <span class="group" title="チェックを外したパートは鳴らしません。再生中に切り替えると、今の位置から鳴らし直します">鳴らすパート
     <label><input type="checkbox" class="mute" data-i="0" checked><span class="mlabel">S</span></label>
     <label><input type="checkbox" class="mute" data-i="1" checked><span class="mlabel">A</span></label>
     <label><input type="checkbox" class="mute" data-i="2" checked><span class="mlabel">T</span></label>
@@ -115,6 +120,7 @@
     <label title="Shift を押しながら段組の上でマウスを動かすと、その横位置の拍の4声が鳴り、縦棒で位置を示します（音符の上でなくても、歌詞や五線の間でも鳴ります）"><input type="checkbox" id="hover" checked>Shift+マウスで和音を聴く</label>
     <label title="拍ごとに鳴っている音からコード名と度数を判定して、五線の下に表示します"><input type="checkbox" id="harm" checked>和音を表示</label>
     <label title="その調の主音・下属音・属音に当たる音符に色を付けます"><input type="checkbox" id="degree" checked>主音・属音に色</label>
+    <label title="各小節の頭に小節番号を表示します（PDF・印刷にも出ます）"><input type="checkbox" id="barnum">小節番号</label>
   </span>
   <span class="group">出力
     <button id="btnPdf">PDF・印刷</button>
@@ -140,7 +146,7 @@
       <tr><td><kbd>R</kbd> / <kbd>0</kbd></td><td>休符</td></tr>
       <tr><td><kbd>Insert</kbd></td><td>上書き⇔挿入の切り替え。上書き（ふだんはこちら）は、入れた長さぶん後ろを上書きし、ほかの小節は動かない。挿入は手前に差し込み、後ろがずれる</td></tr>
       <tr><td><kbd>Z</kbd><kbd>X</kbd><kbd>C</kbd><kbd>V</kbd><kbd>B</kbd></td><td>次に入れる長さ: 全音符・2分・4分・8分・16分（数字の <kbd>1</kbd>〜<kbd>5</kbd> でも同じ）</td></tr>
-      <tr><td>長さキー・<kbd>.</kbd></td><td>カーソルの音符の長さ・付点も変える（伸ばすと後ろを上書き、縮めると休符が残る）。末尾では次に入れる長さだけ</td></tr>
+      <tr><td>長さキー・<kbd>.</kbd></td><td>カーソルの音符の長さ・付点も変える。同じ小節の後ろの音符は消さずにずらす（伸ばすと後ろへ、縮めると前へ詰めて小節の終わりに休符）。小節に入りきらない分は切る。末尾では次に入れる長さだけ</td></tr>
       <tr><td><kbd>.</kbd></td><td>付点の切り替え</td></tr>
       <tr><td><kbd>T</kbd></td><td>タイ（同じ高さの音を後ろにつなぐ）</td></tr>
     </table>
@@ -150,7 +156,7 @@
       <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>半音上げる・下げる</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></td><td>1オクターブ上げる・下げる</td></tr>
       <tr><td><kbd>Delete</kbd></td><td>カーソルの音符を消し、同じ小節の後ろを前に詰める（小節の終わりに休符が入る）。カーソルは次の音符へ</td></tr>
-      <tr><td><kbd>Backspace</kbd></td><td>Delete と同じ。末尾にいるときは、手前の音符を消す</td></tr>
+      <tr><td><kbd>Backspace</kbd></td><td>カーソルの音符を消して、1つ手前の音符へ戻る（続けて押すと前へ順に消える）。末尾や、小節の終わりまで休符だけの所では、手前の音符を消す</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Delete</kbd></td><td>カーソルの小節を4声まとめて削除して詰める（範囲選択中は、選んだ小節すべて）</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Y</kbd></td><td>元に戻す・やり直す</td></tr>
     </table>
@@ -185,6 +191,7 @@
     <h3>聴く</h3>
     <table>
       <tr><td><kbd>Space</kbd></td><td>カーソル位置から再生・停止</td></tr>
+      <tr><td><kbd>Esc</kbd>（再生中）</td><td>再生を止める</td></tr>
       <tr><td><kbd>Shift</kbd>+<kbd>Space</kbd></td><td>先頭から再生</td></tr>
       <tr><td><kbd>H</kbd></td><td>カーソル位置の4声の和音を鳴らす</td></tr>
       <tr><td><kbd>Shift</kbd>+マウスを動かす</td><td>マウスの横位置にある拍の4声が鳴り、縦棒が出る。音符の上でなくても、歌詞や五線の間でよい</td></tr>
@@ -205,6 +212,7 @@
   </div>
 </div>
 <div id="wavHost"></div>
+<div id="playHost"></div>
 <script src="vendor/abcjs-basic-min.js"></script>
 <script src="model.js"></script>
 <script src="harmony.js"></script>

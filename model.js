@@ -376,7 +376,7 @@
   // 画面側がクリックや色付けに使う。
   // lineStarts を渡すと、その小節番号（0始まり、弱起の小節も1つと数える）で段を切る。
   // 原本と同じ段組で表示して見比べるとき用（tools/compare/compare.html）。
-  function toAbc(score, { forEdit = false, lineStarts = null } = {}) {
+  function toAbc(score, { forEdit = false, lineStarts = null, barNumbers = false } = {}) {
     const L = layout(score, { forEdit });
     const toks = [];
     let out = 'X:1\n';
@@ -384,6 +384,8 @@
     if (oneLine(score.composer)) out += `C:${oneLine(score.composer)}\n`;
     out += `M:${score.time.beats}/${score.time.beatType}\nL:1/32\nQ:${abcTempo(score.tempo, score.time)}\n`;
     out += '%%stretchlast 1\n';
+    // 小節番号を各小節の頭に出す（abcjs が数える）
+    if (barNumbers) out += '%%barnumbers 1\n';
     out += `%%score [${score.parts.map((p) => p.id).join(' ')}]\n`;
     for (const p of score.parts) out += `V:${p.id} clef=${p.clef} name="${p.id}"\n`;
     out += `K:${keyName(score.key)}\n`;
@@ -453,6 +455,8 @@
             toks.push({ start, end: out.length, part: pi, idx: it.idx, tick: it.tick, pad: !!it.pad, rest: it.rest });
           }
           out += m === L.total - 1 && !forEdit ? '|]' : '|';
+          // abcjs は弱起の小節も1小節目と数えるので、弱起の次の小節を1小節目に数え直させる
+          if (barNumbers && m === 0 && gm.pickup && pi === 0) out += '[I:setbarnb 1]';
         }
         out += '\n';
         if (hasLyric) out += 'w: ' + lyrics.join(' ') + '\n';
@@ -651,10 +655,50 @@
     return x.join('\n') + '\n';
   }
 
+  // 再生用：同じ高さの音が同じ瞬間に鳴り始める（ユニゾン）とき、1つだけ残して残りを休符にした写しを返す。
+  // 同じ音を重ねて鳴らすと音量が足し算になって爆音になるため。タイでつながった音はひとかたまりで扱い、
+  // いちばん長く伸びるものを残す（同じ長さなら上のパート）。active[i] が false のパートは鳴らさないので比べない。
+  // 長さはそのまま休符にするので、拍の位置や再生の時間は変わらない。
+  function dedupeUnison(score, active = null) {
+    const c = JSON.parse(JSON.stringify(score));
+    const groups = new Map();
+    c.parts.forEach((p, pi) => {
+      if (active && !active[pi]) return;
+      let t = 0;
+      let chain = null;
+      p.events.forEach((e, i) => {
+        if (!e.rest) {
+          if (chain && chain.tieOpen && midi(e) === chain.midi) {
+            chain.idxs.push(i);
+            chain.end = t + e.dur;
+          } else {
+            chain = { part: pi, idxs: [i], start: t, end: t + e.dur, midi: midi(e) };
+            const k = chain.start + ':' + chain.midi;
+            if (!groups.has(k)) groups.set(k, []);
+            groups.get(k).push(chain);
+          }
+          chain.tieOpen = !!e.tie;
+        } else {
+          chain = null;
+        }
+        t += e.dur;
+      });
+    });
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      list.sort((a, b) => b.end - a.end || a.part - b.part);
+      for (const ch of list.slice(1)) {
+        const ev = c.parts[ch.part].events;
+        for (const i of ch.idxs) ev[i] = { rest: true, dur: ev[i].dur };
+      }
+    }
+    return c;
+  }
+
   const api = {
     DIV, MAJOR, MINOR, STEP_SEMI, ENSEMBLES,
     newScore, setEnsemble, keyName, keyAlter, midi, samePitch, measureTicks, beatTicks, partTicks,
-    pickupTicks, setPickup, grid, setChange, deleteMeasures, secondsAt, layout, toAbc, toJson, fromJson, toMusicXml,
+    pickupTicks, setPickup, grid, setChange, deleteMeasures, dedupeUnison, secondsAt, layout, toAbc, toJson, fromJson, toMusicXml,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ScoreModel = api;

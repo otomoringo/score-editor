@@ -168,7 +168,7 @@
 
   function render() {
     updateCenterPad();
-    const r = M.toAbc(viewScore(), { forEdit: !printing });
+    const r = M.toAbc(viewScore(), { forEdit: !printing, barNumbers: $('barnum').checked });
     toks = r.toks;
     info = r;
     visualObj = ABCJS.renderAbc('paper', r.abc, {
@@ -671,11 +671,62 @@
     cur.idx = at + 1;
   }
 
-  // 音符の長さを変える。上書きモードでは、伸ばしたぶんは後ろを上書きし、縮めたぶんは休符になる。
+  // 上書きモードで a〜b の長さを oldLen から newLen に変えたあと（長さは書き換え済み）、
+  // 同じ小節の後ろの音符・休符を消さずに、そのまま後ろ（または前）へずらす。
+  // 伸びたぶんは小節の終わりから詰める（終わりの休符から先に削れ、それでも入らなければ小節線を越える分を切る）。
+  // 縮んだぶんは小節の終わりに休符を足す。次の小節より後ろは動かない。
+  // 変えた範囲が小節をまたぐ、小節線をまたぐ音符がある、などで扱えないときは false を返す。
+  function shiftInMeasure(partIdx, a, b, oldLen, newLen) {
+    const ev = score.parts[partIdx].events;
+    const start = startTick(partIdx, a);
+    const g = M.grid(score);
+    const gm = g.at(g.find(start));
+    const mEnd = gm.start + gm.len;
+    if (start + oldLen > mEnd || start + newLen > mEnd) return false;
+    let t = start + oldLen;
+    let j = b + 1;
+    while (j < ev.length && t + ev[j].dur <= mEnd) { t += ev[j].dur; j++; }
+    // パートが小節の途中で終わっている（打ち込みの途中）なら、残りは空いているものとして扱う
+    const partEnds = j === ev.length && t < mEnd;
+    if (t !== mEnd && !partEnds) return false;
+    const tail = ev.slice(b + 1, j);
+    const room = mEnd - (start + newLen);
+    let total = tail.reduce((s, e) => s + e.dur, 0);
+    let dropped = false;
+    if (total < room) {
+      // 打ち込みの途中なら、休符で埋めずに、続きをそこから打ち込めるようにしておく
+      if (!partEnds) tail.push({ rest: true, dur: room - total });
+    } else {
+      while (total > room) {
+        const last = tail[tail.length - 1];
+        const over = total - room;
+        if (last.dur <= over) { tail.pop(); total -= last.dur; if (!last.rest) dropped = true; }
+        else { last.dur -= over; total = room; if (!last.rest) dropped = true; }
+      }
+    }
+    ev.splice(b + 1, j - b - 1, ...tail);
+    // つながる相手が変わったタイを外す（同じ高さの音符がすぐ後ろに続くときだけ残す）
+    const endIdx = b + tail.length + 1;
+    for (let k = Math.max(0, a - 1); k <= endIdx && k < ev.length; k++) {
+      const e = ev[k];
+      if (e.rest || !e.tie) continue;
+      const n = ev[k + 1];
+      if (!n || n.rest || M.midi(n) !== M.midi(e)) e.tie = false;
+    }
+    if (dropped) say('小節に入りきらない音符を切りました');
+    return true;
+  }
+
+  // 音符の長さを変える。上書きモードでは、同じ小節の後ろの音符をずらして残す（shiftInMeasure）。
+  // それができないときは、伸ばしたぶんは後ろを上書きし、縮めたぶんは休符になる。
   function resizeEvent(idx, dur) {
     const ev = events();
     const e = ev[idx];
     if (insertMode || idx === ev.length - 1 || dur === e.dur) { e.dur = dur; return; }
+    const old = e.dur;
+    e.dur = dur;
+    if (shiftInMeasure(cur.part, idx, idx, old, dur)) return;
+    e.dur = old;
     const end = startTick(cur.part, idx) + e.dur;
     if (dur > e.dur) {
       carve(cur.part, end, end + dur - e.dur);
@@ -762,6 +813,7 @@
           newLen += ev[i].dur;
         }
         if (insertMode || b === ev.length - 1 || newLen === oldLen) continue;
+        if (shiftInMeasure(pi, a, b, oldLen, newLen)) continue;
         if (newLen > oldLen) {
           // 伸びたぶん、選んだ範囲のすぐ後ろを先頭から削る（削りきれない音符は残りを休符にする）
           const rest = ev.splice(b + 1);
@@ -937,16 +989,36 @@
   // 上書きモードでは、同じ小節の中でそれより後ろの音符・休符を前に詰め、小節の終わりに消した長さぶんの休符を足す
   // （ほかの小節の位置は動かない）。挿入モードでは、そのパートの後ろ全体が詰まる。
   // カーソルは、消した音符の次にあった音符に置く（末尾で手前を消したときは末尾のまま）。
-  function deleteAt(idx) {
+  // back が true（Backspace）のときは、カーソルを手前へ戻す：カーソルの音符を消したら1つ前の音符へ、
+  // 手前の音符を消したら、その音符があった位置へ。続けて押すと、後ろから前へ順に消していける。
+  function deleteAt(idx, back = false) {
     const ev = events();
     if (idx < 0 || idx >= ev.length) return;
-    const target = idx === cur.idx ? ev[idx + 1] : ev[cur.idx];
+    const atEnd = cur.idx >= ev.length;
+    let target;
+    if (!back) target = idx === cur.idx ? ev[idx + 1] : ev[cur.idx];
+    else target = idx === cur.idx ? ev[idx - 1] : null;
     mutate(() => {
       if (insertMode || idx === ev.length - 1) eraseRange(cur.part, idx, idx);
       else removeInMeasure(cur.part, idx);
       const at = target ? events().indexOf(target) : -1;
-      cur.idx = at >= 0 ? at : Math.min(idx, events().length);
+      if (at >= 0) cur.idx = at;
+      else if (back && idx !== cur.idx && !atEnd) cur.idx = Math.min(idx, events().length - 1);
+      else cur.idx = Math.min(idx, events().length);
     });
+  }
+
+  // Backspace：カーソルが音符の上なら、それを消して1つ前へ。
+  // カーソルが末尾や「空いている休符」（そこから小節の終わりまで休符だけ）の上なら、手前の音符を消す
+  // （休符は飛ばして、いちばん近い手前の音符を消す）。
+  function backspace() {
+    const ev = events();
+    const onEmpty = cur.idx >= ev.length || (!insertMode && isEmptyRest(cur.part, cur.idx));
+    if (!onEmpty) { deleteAt(cur.idx, true); return; }
+    let i = Math.min(cur.idx, ev.length) - 1;
+    while (i >= 0 && ev[i].rest && !insertMode) i--;
+    if (i < 0) return;
+    deleteAt(i, true);
   }
 
   function removeInMeasure(partIdx, idx) {
@@ -963,9 +1035,24 @@
     let j = idx + 1;
     while (j < ev.length && t + ev[j].dur <= me) { t += ev[j].dur; j++; }
     ev.splice(idx, 1);
-    // 後ろに何も続かないなら、休符を足す必要はない（パートがそこで終わる）
-    if (j - 1 < ev.length) ev.splice(j - 1, 0, { rest: true, dur: e.dur });
+    // パートが小節の途中で終わっている（打ち込みの途中）なら、休符を足す必要はない。
+    // 小節の終わりまで埋まっていたなら、パートの最後の小節でも休符を足して小節の長さを保つ
+    if (t === me) {
+      ev.splice(j - 1, 0, { rest: true, dur: e.dur });
+      mergeRestsBefore(ev, j - 1);
+    }
     if (idx > 0 && !ev[idx - 1].rest) ev[idx - 1].tie = false;
+  }
+
+  // ev[at] の休符を、すぐ前に続く休符とまとめる（まとめた長さが楽譜で書ける長さのときだけ）。
+  // 消すたびに小節の終わりに小さな休符が並んでいくのを防ぐ。前の休符の方を残すので、それを指すカーソルはそのまま使える。
+  const WRITABLE = new Set([1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48]);
+  function mergeRestsBefore(ev, at) {
+    while (at > 0 && ev[at].rest && ev[at - 1].rest && WRITABLE.has(ev[at - 1].dur + ev[at].dur)) {
+      ev[at - 1].dur += ev[at].dur;
+      ev.splice(at, 1);
+      at--;
+    }
   }
 
   // 小節ごと削除（4声まとめて）。範囲選択中なら、選んだ音符がかかる小節をすべて消す。
@@ -1234,7 +1321,65 @@
     clearPlaying();
   }
 
-  async function play(fromTick) {
+  // ---------- 範囲（小節番号で指定） ----------
+
+  // 小節番号（画面に出る番号。弱起があれば弱起が0）を、0始まりの小節の位置に直す
+  function measureCount() {
+    const g = M.grid(score);
+    return g.find(Math.max(0, info.totalTicks - 1)) + 1;
+  }
+  function indexOfNumber(n) {
+    return M.grid(score).at(0).pickup ? n : n - 1;
+  }
+
+  // 範囲の入力欄を読む。両方空なら null（曲全体）。おかしな値なら、理由を表示して false を返す。
+  function readRange() {
+    const fv = $('rangeFrom').value.trim();
+    const tv = $('rangeTo').value.trim();
+    if (!fv && !tv) return null;
+    const count = measureCount();
+    const g = M.grid(score);
+    const first = g.at(0).number;
+    const last = g.at(count - 1).number;
+    const from = fv ? Number(fv) : first;
+    const to = tv ? Number(tv) : last;
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < first || to > last || from > to) {
+      say(`範囲は ${first}〜${last} 小節の中で、始めが終わり以下になるように指定してください`);
+      return false;
+    }
+    const a = indexOfNumber(from);
+    const b = indexOfNumber(to);
+    return { from, to, a, b, startTick: g.at(a).start, endTick: g.at(b).start + g.at(b).len };
+  }
+
+  // 範囲の小節だけを取り出した楽譜（書き出し用）。範囲の前後の小節を消して作る
+  function rangeScore(r) {
+    const c = M.fromJson(M.toJson(score));
+    const count = measureCount();
+    if (r.b < count - 1) M.deleteMeasures(c, r.b + 1, count - 1);
+    if (r.a > 0) M.deleteMeasures(c, 0, r.a - 1);
+    return c;
+  }
+
+  function playRange() {
+    const r = readRange();
+    if (r === false) return;
+    if (!r) { play(0); return; }
+    play(r.startTick, r.endTick);
+  }
+
+  // 再生中の位置（ミリ秒）と、範囲再生の終わり。鳴らすパートを変えたときに、同じ位置から鳴らし直すのに使う
+  let playAtMs = 0;
+  let playEnd = null;
+
+  // 鳴らすパートは再生の準備のときに決まるので、再生中に変えたら、今の位置から鳴らし直す
+  function replayWithParts() {
+    if (!playing) return;
+    play(0, playEnd, playAtMs);
+  }
+
+  // fromMs を渡すと、fromTick の代わりにその時刻（曲の頭からのミリ秒）から鳴らす
+  async function play(fromTick, endTick = null, fromMs = null) {
     stopPlay();
     closeLyric();
     if (!score.parts.some((p) => p.events.some((e) => !e.rest))) { say('音符がまだありません'); return; }
@@ -1243,7 +1388,9 @@
     const mine = new ABCJS.synth.CreateSynth();
     synth = mine;
     try {
-      await mine.init({ audioContext: ctx(), visualObj, options: synthOptions() });
+      // 同じ音の重なり（ユニゾン）を1つにした楽譜で鳴らす。音符の位置は同じなので、表示の追従はそのまま使える
+      const playObj = ABCJS.renderAbc('playHost', M.toAbc(M.dedupeUnison(viewScore(), activeParts()), { forEdit: !printing }).abc)[0];
+      await mine.init({ audioContext: ctx(), visualObj: playObj, options: synthOptions() });
       await mine.prime();
     } catch (err) {
       if (synth === mine) { stopPlay(); say('再生の準備に失敗しました: ' + (err && err.message ? err.message : err)); }
@@ -1251,10 +1398,16 @@
     }
     if (synth !== mine) return; // 準備中に止められた
     // 途中でテンポが変わる曲では、拍の割合と時間の割合がずれるので、時間で位置を決める
-    const frac = Math.min(0.999, Math.max(0, M.secondsAt(score, fromTick) / M.secondsAt(score, info.totalTicks)));
+    const fromSec = fromMs !== null ? fromMs / 1000 : M.secondsAt(score, fromTick);
+    const frac = Math.min(0.999, Math.max(0, fromSec / M.secondsAt(score, info.totalTicks)));
+    playEnd = endTick;
+    playAtMs = fromSec * 1000;
+    // 範囲の終わりまで来たら止める（終わりの小節線の位置の音が鳴り始めたところで止める）
+    const endMs = endTick !== null && endTick < info.totalTicks ? M.secondsAt(score, endTick) * 1000 - 5 : Infinity;
     timing = new ABCJS.TimingCallbacks(visualObj, {
       eventCallback: (ev) => {
-        if (!ev) { stopPlay(); return; }
+        if (!ev || ev.milliseconds >= endMs) { stopPlay(); return; }
+        playAtMs = ev.milliseconds;
         clearPlaying();
         let firstEl = null;
         for (const set of ev.elements || []) for (const el of set) { el.classList.add('playing'); firstEl = firstEl || el; }
@@ -1392,22 +1545,73 @@
     }
   });
 
+  // 書き出す楽譜とファイル名。範囲が指定されていれば、その小節だけ
+  function exportTarget() {
+    const r = readRange();
+    if (r === false) return null;
+    if (!r) return { sc: score, name: baseName() };
+    return { sc: rangeScore(r), name: `${baseName()}_${r.from}-${r.to}小節` };
+  }
+
+  // abcjs の MIDI は、パートごとにチャンネル（0〜3）を分けるのに、音色の指定（プログラムチェンジ）を
+  // どのトラックにもチャンネル0で書く。そのままだと2番目以降のパートは音色の指定がなく、ほかのソフトではピアノで鳴る。
+  // トラックごとに、音符のチャンネルと同じチャンネルへ音色の指定を書き換える。
+  function fixMidiPrograms(data) {
+    const b = new Uint8Array(data);
+    let p = 14; // ヘッダ（MThd）の後ろから
+    while (p + 8 <= b.length) {
+      const len = (b[p + 4] << 24) | (b[p + 5] << 16) | (b[p + 6] << 8) | b[p + 7];
+      const start = p + 8;
+      const end = start + len;
+      const progAt = [];
+      let noteCh = -1;
+      let q = start;
+      let rs = 0;
+      const vlq = () => { let c; do { c = b[q++]; } while (c & 0x80); };
+      while (q < end) {
+        vlq();
+        let st = b[q];
+        if (st & 0x80) { q++; rs = st; } else st = rs;
+        if (st === 0xff) { q++; const s = q; vlq(); let l = 0; for (let i = s; i < q; i++) l = (l << 7) | (b[i] & 0x7f); q += l; }
+        else if (st === 0xf0 || st === 0xf7) { const s = q; vlq(); let l = 0; for (let i = s; i < q; i++) l = (l << 7) | (b[i] & 0x7f); q += l; }
+        else {
+          const hi = st & 0xf0;
+          if (hi === 0xc0 || hi === 0xd0) {
+            if (hi === 0xc0 && b[q - 1] === st) progAt.push(q - 1);
+            q += 1;
+          } else {
+            if (hi === 0x90 && noteCh < 0) noteCh = st & 0x0f;
+            q += 2;
+          }
+        }
+      }
+      if (noteCh >= 0) for (const i of progAt) b[i] = 0xc0 | noteCh;
+      p = end;
+    }
+    return b;
+  }
+
   function exportMidi() {
-    const abc = M.toAbc(score).abc;
+    const t = exportTarget();
+    if (!t) return;
+    const abc = M.toAbc(t.sc).abc;
     let data = ABCJS.synth.getMidiFile(abc, { midiOutputType: 'binary', program: PROGRAM[score.instrument] || 0 });
     if (Array.isArray(data)) data = data[0];
-    download(baseName() + '.mid', new Blob([data], { type: 'audio/midi' }));
+    data = fixMidiPrograms(data);
+    download(t.name + '.mid', new Blob([data], { type: 'audio/midi' }));
   }
 
   async function exportWav() {
+    const t = exportTarget();
+    if (!t) return;
     say('WAVを作成中…');
     try {
-      const v = ABCJS.renderAbc('wavHost', M.toAbc(score).abc)[0];
+      const v = ABCJS.renderAbc('wavHost', M.toAbc(M.dedupeUnison(t.sc, activeParts())).abc)[0];
       const s = new ABCJS.synth.CreateSynth();
       await s.init({ audioContext: ctx(), visualObj: v, options: synthOptions() });
       await s.prime();
       const blob = await (await fetch(s.download())).blob();
-      download(baseName() + '.wav', blob);
+      download(t.name + '.wav', blob);
       say('');
     } catch (err) {
       say('WAVを作成できませんでした: ' + (err && err.message ? err.message : err));
@@ -1442,6 +1646,8 @@
 
   document.addEventListener('keydown', (e) => {
     if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') return;
+    // 再生中の Esc は、どこにフォーカスがあっても停止（選択の解除などより先に）
+    if (e.code === 'Escape' && playing) { e.preventDefault(); stopPlay(); return; }
     const tag = e.target.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
     const justEntered = lastEntered;
@@ -1500,8 +1706,8 @@
     else if (code === 'PageUp') switchPart(-1);
     else if (code === 'PageDown') switchPart(1);
     else if (code === 'Delete') { if (!deleteSelection()) deleteAt(cur.idx); }
-    // Backspace も Delete と同じ（カーソルの音符を消す）。末尾にいるときだけは、手前の音符を消す
-    else if (code === 'Backspace') { if (!deleteSelection()) deleteAt(cur.idx < events().length ? cur.idx : cur.idx - 1); }
+    // Backspace はカーソルの音符を消して手前へ戻る。末尾・空いている休符の上では、手前の音符を消す
+    else if (code === 'Backspace') { if (!deleteSelection()) backspace(); }
     else if (code === 'Space') {
       if (playing) stopPlay();
       else play(e.shiftKey ? 0 : startTick(cur.part, cur.idx));
@@ -1560,6 +1766,14 @@
     click('btnSave', saveJson);
     click('btnPlay', () => play(startTick(cur.part, cur.idx)));
     click('btnPlayTop', () => play(0));
+    click('btnPlayRange', playRange);
+    // 範囲の欄で Enter を押したら、その範囲を再生する
+    for (const id of ['rangeFrom', 'rangeTo']) {
+      $(id).addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); playRange(); }
+        else if (e.key === 'Escape') e.target.blur();
+      });
+    }
     click('btnStop', stopPlay);
     click('btnPdf', printScore);
     click('btnMidi', exportMidi);
@@ -1574,7 +1788,7 @@
       try { localStorage.setItem('score-editor.theme', light ? 'light' : 'dark'); } catch { /* 記憶できなくても切り替えは効く */ }
       themeLabel();
     });
-    document.querySelectorAll('.mute').forEach((c) => c.addEventListener('change', () => c.blur()));
+    document.querySelectorAll('.mute').forEach((c) => c.addEventListener('change', () => { c.blur(); replayWithParts(); }));
     $('hover').addEventListener('change', (e) => e.target.blur());
     for (const id of ['harm', 'degree']) {
       try { if (localStorage.getItem('score-editor.' + id) === 'off') $(id).checked = false; } catch { /* 記憶が読めなければ既定のまま */ }
@@ -1585,6 +1799,13 @@
         e.target.blur();
       });
     }
+    // 小節番号は楽譜そのものに書き込むので、切り替えたら描き直す
+    try { if (localStorage.getItem('score-editor.barnum') === 'on') $('barnum').checked = true; } catch { /* 記憶が読めなければ既定のまま */ }
+    $('barnum').addEventListener('change', (e) => {
+      try { localStorage.setItem('score-editor.barnum', e.target.checked ? 'on' : 'off'); } catch { /* 記憶できなくても切り替えは効く */ }
+      render();
+      e.target.blur();
+    });
     window.addEventListener('resize', () => { updateCenterPad(); decorate(); });
   }
 
